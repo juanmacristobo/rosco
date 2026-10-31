@@ -7,3 +7,36 @@ This version has breaking changes — APIs, conventions, and file structure may 
 This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
 
 <!-- END:nextjs-agent-rules -->
+
+# rosco
+
+Single-package Next.js App Router app. There is no `src/`: routes live in `app/`, and `@/*` maps to the repo root. The README is untouched `create-next-app` boilerplate; `package.json` and the configs are the source of truth.
+
+## Commands
+
+- `npm run dev` — Turbopack dev server on port 3000.
+- `npm run build` — production build; also runs TypeScript and prerender validation.
+- `npm run start` — serve the production build.
+- `npm run lint` — ESLint 9 flat config.
+- `npx tsc --noEmit` — standalone typecheck; there is no `typecheck` script.
+- `npx next typegen` — regenerate route types without a full build.
+- No test runner, test script, CI, or formatter is configured.
+- Verify in order: `npm run lint`, `npx tsc --noEmit`, then `npm run build`.
+
+## Next.js 16 / Cache Components
+
+- `next.config.ts` sets `cacheComponents: true` and `partialPrefetching: true`. They are coupled: `partialPrefetching` without `cacheComponents` fails config validation.
+- Cache Components makes data dynamic by default. Cache with `use cache` plus `cacheLife` instead of route segment configs: exported `dynamic`, `revalidate`, `fetchCache`, and `dynamicParams` error. The `runtime` config is unsupported (Node.js only), including `runtime = "nodejs"`.
+- Wrap `cookies()`, `headers()`, and `searchParams` access in `<Suspense>` so the rest of the route can prerender. `export const instant = false` only silences development-time instant-navigation validation for a segment.
+- `Date.now()`, `Math.random()`, and `crypto.randomUUID()` in a prerendered server component fail the build; move them into a client component or behind `connection()`/`<Suspense>`.
+- `PageProps<...>` and `LayoutProps<...>` are generated global types; do not import them. Generated route types live in `.next/types` and `.next/dev/types`.
+- `next-env.d.ts` is generated and gitignored; do not edit or commit it.
+
+## Styling
+
+- Tailwind v4 runs through the `@tailwindcss/turbopack` loader configured in `next.config.ts`; there is no PostCSS config. Keep dev/build on Turbopack (the default); `--webpack` will not apply this loader.
+- `app/globals.css` imports `@import "tailwindcss"` and defines theme tokens with `@theme inline`.
+
+## Environment
+
+- `.env*` is gitignored; Next.js loads `.env*` by default. No custom env loader or deployment config exists.
