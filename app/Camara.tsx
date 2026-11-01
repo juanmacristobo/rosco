@@ -77,6 +77,7 @@ export default function Camara() {
   const [iniciando, setIniciando] = useState(false)
   const [errorCamara, setErrorCamara] = useState<string | null>(null)
   const [errorAudio, setErrorAudio] = useState<string | null>(null)
+  const [vertical, setVertical] = useState(false)
 
   // DEBUG TEMPORAL: datos del stream para diagnosticar el encuadre.
   const [infoVideo, setInfoVideo] = useState({
@@ -100,6 +101,16 @@ export default function Camara() {
       videoStreamRef.current = null
       audioStreamRef.current = null
     }
+  }, [])
+
+  useEffect(() => {
+    const consulta = window.matchMedia('(orientation: portrait)')
+    const actualizar = () => setVertical(consulta.matches)
+
+    actualizar()
+    consulta.addEventListener('change', actualizar)
+
+    return () => consulta.removeEventListener('change', actualizar)
   }, [])
 
   useEffect(() => {
@@ -343,33 +354,46 @@ export default function Camara() {
       )}
 
       {activa && (
-        <button
-          type="button"
-          onClick={cambiarCamara}
-          disabled={cambiando || iniciando}
-          aria-busy={cambiando}
+        <div
           style={{
             position: 'absolute',
-            right: 'calc(env(safe-area-inset-right, 0px) + 16px)',
-            bottom: 'calc(env(safe-area-inset-bottom, 0px) + 24px)',
-            minWidth: 180,
-            minHeight: 60,
-            padding: '0 24px',
-            border: 'none',
-            borderRadius: 999,
-            background: 'rgba(255, 255, 255, 0.92)',
-            color: '#000',
-            fontSize: 18,
-            fontWeight: 700,
-            boxShadow: '0 4px 16px rgba(0, 0, 0, 0.35)',
-            opacity: cambiando || iniciando ? 0.6 : 1,
-            touchAction: 'manipulation',
-            WebkitTapHighlightColor: 'transparent',
+            left: 0,
+            right: 0,
+            bottom: 0,
             zIndex: 1,
+            display: 'flex',
+            justifyContent: 'flex-end',
+            paddingLeft: 'calc(env(safe-area-inset-left, 0px) + 16px)',
+            paddingRight: 'calc(env(safe-area-inset-right, 0px) + 16px)',
+            paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 24px)',
+            pointerEvents: 'none',
           }}
         >
-          {cambiando ? 'Cambiando…' : 'Cambiar cámara'}
-        </button>
+          <button
+            type="button"
+            onClick={cambiarCamara}
+            disabled={cambiando || iniciando}
+            aria-busy={cambiando}
+            style={{
+              minWidth: 180,
+              minHeight: 60,
+              padding: '0 24px',
+              border: 'none',
+              borderRadius: 999,
+              background: 'rgba(255, 255, 255, 0.92)',
+              color: '#000',
+              fontSize: 18,
+              fontWeight: 700,
+              boxShadow: '0 4px 16px rgba(0, 0, 0, 0.35)',
+              opacity: cambiando || iniciando ? 0.6 : 1,
+              touchAction: 'manipulation',
+              WebkitTapHighlightColor: 'transparent',
+              pointerEvents: 'auto',
+            }}
+          >
+            {cambiando ? 'Cambiando…' : 'Cambiar cámara'}
+          </button>
+        </div>
       )}
 
       {(errorCamara || errorAudio) && (
@@ -391,6 +415,27 @@ export default function Camara() {
         >
           {errorCamara && <p style={{ margin: 0 }}>{errorCamara}</p>}
           {errorAudio && <p style={{ margin: errorCamara ? '8px 0 0' : 0 }}>{errorAudio}</p>}
+        </div>
+      )}
+
+      {vertical && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 10,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 24,
+            background: 'rgba(0, 0, 0, 0.9)',
+            color: '#fff',
+            fontSize: 24,
+            fontWeight: 700,
+            textAlign: 'center',
+          }}
+        >
+          Girá el teléfono a horizontal
         </div>
       )}
     </main>
