@@ -57,6 +57,14 @@ async function reproducir(video: HTMLVideoElement) {
   }
 }
 
+function reajustarEncuadre(video: HTMLVideoElement) {
+  // Safari a veces no aplica object-fit al cambiar el stream; alternar el valor
+  // y forzar un cálculo de layout hace que vuelva a aplicar el encuadre elegido.
+  video.style.objectFit = 'cover'
+  video.getBoundingClientRect()
+  video.style.objectFit = 'contain'
+}
+
 export default function Camara() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const videoStreamRef = useRef<MediaStream | null>(null)
@@ -132,6 +140,7 @@ export default function Camara() {
           return
         }
 
+        reajustarEncuadre(video)
         setActiva(true)
         camaraLista = true
       } catch (e) {
@@ -190,6 +199,7 @@ export default function Camara() {
         return
       }
 
+      reajustarEncuadre(video)
       setFacingMode(nuevoFacingMode)
     } catch (e) {
       soltarVideo()
@@ -217,13 +227,14 @@ export default function Camara() {
         ref={videoRef}
         playsInline
         muted
+        onLoadedMetadata={(event) => reajustarEncuadre(event.currentTarget)}
         style={{
           position: 'absolute',
           inset: 0,
           display: 'block',
           width: '100%',
           height: '100%',
-          objectFit: 'cover',
+          objectFit: 'contain',
         }}
       />
 
