@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import {
   AUDIO_CONSTRAINTS,
@@ -83,6 +83,27 @@ function formatearTiempo(segundos: number) {
   return `${String(minutos).padStart(2, '0')}:${String(resto).padStart(2, '0')}`
 }
 
+function crearNombreArchivo(mimeType: string) {
+  const ahora = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const fecha = `${ahora.getFullYear()}${pad(ahora.getMonth() + 1)}${pad(ahora.getDate())}`
+  const hora = `${pad(ahora.getHours())}${pad(ahora.getMinutes())}`
+  const extension = mimeType.includes('mp4') ? 'mp4' : 'webm'
+  return `rosco-${fecha}-${hora}.${extension}`
+}
+
+function suscribirDebug() {
+  return () => {}
+}
+
+function leerDebug() {
+  return new URLSearchParams(window.location.search).get('debug') === '1'
+}
+
+function leerDebugServidor() {
+  return false
+}
+
 export default function Camara() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -101,6 +122,8 @@ export default function Camara() {
   const intervaloRecRef = useRef<number | null>(null)
   const urlGrabacionRef = useRef<string | null>(null)
   const preparandoGrabacionRef = useRef(false)
+  const fileRef = useRef<File | null>(null)
+  const wakeLockRef = useRef<WakeLockSentinel | null>(null)
 
   const [activa, setActiva] = useState(false)
   const [facingMode, setFacingMode] = useState<FacingMode>('environment')
@@ -127,6 +150,40 @@ export default function Camara() {
     ancho: number
     alto: number
   } | null>(null)
+  const [puedeCompartir, setPuedeCompartir] = useState(false)
+  const [errorCompartir, setErrorCompartir] = useState<string | null>(null)
+  const [wakeLockActivo, setWakeLockActivo] = useState(false)
+
+  const debug = useSyncExternalStore(suscribirDebug, leerDebug, leerDebugServidor)
+
+  const pedirWakeLock = useCallback(async () => {
+    if (!navigator.wakeLock) return
+
+    try {
+      const sentinel = await navigator.wakeLock.request('screen')
+      if (desmontadoRef.current) {
+        void sentinel.release().catch(() => undefined)
+        return
+      }
+
+      wakeLockRef.current = sentinel
+      setWakeLockActivo(true)
+
+      sentinel.addEventListener('release', () => {
+        if (wakeLockRef.current === sentinel) wakeLockRef.current = null
+        if (!desmontadoRef.current) setWakeLockActivo(false)
+      })
+    } catch {
+      // Sin Wake Lock disponible: la grabación sigue igual.
+    }
+  }, [])
+
+  const soltarWakeLock = useCallback(() => {
+    const sentinel = wakeLockRef.current
+    wakeLockRef.current = null
+    if (sentinel) void sentinel.release().catch(() => undefined)
+    if (!desmontadoRef.current) setWakeLockActivo(false)
+  }, [])
 
   // DEBUG TEMPORAL: datos del stream para diagnosticar el encuadre.
   const [infoVideo, setInfoVideo] = useState({
@@ -152,6 +209,8 @@ export default function Camara() {
 
     return () => {
       desmontadoRef.current = true
+      soltarWakeLock()
+
       if (rafRef.current !== null) {
         cancelAnimationFrame(rafRef.current)
         rafRef.current = null
@@ -189,7 +248,21 @@ export default function Camara() {
       videoStreamRef.current = null
       audioStreamRef.current = null
     }
-  }, [])
+  }, [soltarWakeLock])
+
+  // Wake Lock: al volver a la pestaña, si se sigue grabando, se pide de nuevo.
+  useEffect(() => {
+    const alCambiarVisibilidad = () => {
+      if (document.visibilityState !== 'visible') return
+      if (estadoGrabacion !== 'grabando') return
+      if (wakeLockRef.current) return
+      void pedirWakeLock()
+    }
+
+    document.addEventListener('visibilitychange', alCambiarVisibilidad)
+
+    return () => document.removeEventListener('visibilitychange', alCambiarVisibilidad)
+  }, [estadoGrabacion, pedirWakeLock])
 
   useEffect(() => {
     const consulta = window.matchMedia('(orientation: portrait)')
@@ -365,6 +438,8 @@ export default function Camara() {
   }
 
   function liberarGrabacion() {
+    soltarWakeLock()
+
     if (intervaloRecRef.current !== null) {
       clearInterval(intervaloRecRef.current)
       intervaloRecRef.current = null
@@ -480,6 +555,12 @@ export default function Camara() {
           setTipoSesionAudioActual(leerTipoSesionAudio())
           const url = URL.createObjectURL(blob)
           urlGrabacionRef.current = url
+          const archivo = new File([blob], crearNombreArchivo(tipo), {
+            type: tipo.split(';')[0],
+          })
+          fileRef.current = archivo
+          setPuedeCompartir(navigator.canShare?.({ files: [archivo] }) ?? false)
+          setErrorCompartir(null)
           setResolucionGrabacion(null)
           setUrlGrabacion(url)
           setInfoGrabacion({
@@ -502,6 +583,7 @@ export default function Camara() {
       setEstadoGrabacion('grabando')
 
       recorder.start(1000)
+      void pedirWakeLock()
 
       intervaloRecRef.current = window.setInterval(() => {
         setSegundosGrabacion((performance.now() - inicioGrabacionRef.current) / 1000)
@@ -544,6 +626,7 @@ export default function Camara() {
 
     duracionGrabacionRef.current = (performance.now() - inicioGrabacionRef.current) / 1000
     setSegundosGrabacion(duracionGrabacionRef.current)
+    soltarWakeLock()
 
     if (intervaloRecRef.current !== null) {
       clearInterval(intervaloRecRef.current)
@@ -574,48 +657,39 @@ export default function Camara() {
     setAvisoSinAudio(false)
     setSegundosGrabacion(0)
     setResolucionGrabacion(null)
+    fileRef.current = null
+    setPuedeCompartir(false)
+    setErrorCompartir(null)
     setEstadoGrabacion('inactivo')
   }
 
-  // DEBUG TEMPORAL: beep de prueba para verificar el ruteo de audio.
-  async function probarSonido() {
-    try {
-      const mezclaActiva = mezclaRef.current
-      const mezcla = mezclaActiva ?? crearMezclaAudio(null)
+  function compartir() {
+    const archivo = fileRef.current
+    if (!archivo) return
 
-      await mezcla.ctx.resume()
+    // Sin await ni trabajo previo: la activación del usuario se pierde si no.
+    navigator.share({ files: [archivo], title: 'Rosco' }).catch((e: unknown) => {
+      if (e instanceof Error && e.name === 'AbortError') return
+      if (desmontadoRef.current) return
+      setErrorCompartir(
+        e instanceof Error
+          ? `No se pudo compartir el video: ${e.message}`
+          : 'No se pudo compartir el video.'
+      )
+    })
+  }
 
-      const ahora = mezcla.ctx.currentTime
-      const oscilador = mezcla.ctx.createOscillator()
-      const ganancia = mezcla.ctx.createGain()
+  function descargar() {
+    const archivo = fileRef.current
+    const url = urlGrabacionRef.current
+    if (!archivo || !url) return
 
-      oscilador.type = 'sine'
-      oscilador.frequency.setValueAtTime(880, ahora)
-
-      ganancia.gain.setValueAtTime(0.3, ahora)
-      ganancia.gain.exponentialRampToValueAtTime(0.001, ahora + 0.4)
-
-      oscilador.connect(ganancia)
-      ganancia.connect(mezcla.destino)
-      ganancia.connect(mezcla.ctx.destination)
-
-      oscilador.start(ahora)
-      oscilador.stop(ahora + 0.4)
-
-      if (!mezclaActiva) {
-        window.setTimeout(() => {
-          void mezcla.ctx.close().catch(() => undefined)
-        }, 600)
-      }
-    } catch (e) {
-      if (!desmontadoRef.current) {
-        setErrorGrabacion(
-          e instanceof Error
-            ? `No se pudo reproducir el sonido de prueba: ${e.message}`
-            : 'No se pudo reproducir el sonido de prueba.'
-        )
-      }
-    }
+    const enlace = document.createElement('a')
+    enlace.href = url
+    enlace.download = archivo.name
+    document.body.appendChild(enlace)
+    enlace.click()
+    document.body.removeChild(enlace)
   }
 
   const mbPorMinuto =
@@ -665,32 +739,36 @@ export default function Camara() {
         }}
       />
 
-      {/* DEBUG TEMPORAL: borrar este bloque cuando termine el diagnóstico. */}
-      <div
-        style={{
-          position: 'absolute',
-          top: 8,
-          left: 8,
-          zIndex: 2,
-          padding: '4px 6px',
-          borderRadius: 4,
-          background: 'rgba(0, 0, 0, 0.55)',
-          color: '#fff',
-          fontFamily: 'monospace',
-          fontSize: 11,
-          lineHeight: 1.3,
-          pointerEvents: 'none',
-        }}
-      >
-        {infoVideo.ancho} x {infoVideo.alto} · AR {infoVideo.relacion} · {infoVideo.facingMode} ·{' '}
-        {mimeTypeElegido || 'sin mime'} · rec:{estadoRecorder}
-        <br />
-        audio: {infoAudio.sampleRate}Hz · {infoAudio.channelCount}ch · ec:
-        {infoAudio.echoCancellation ? 'on' : 'off'} · ns:
-        {infoAudio.noiseSuppression ? 'on' : 'off'} · agc:
-        {infoAudio.autoGainControl ? 'on' : 'off'} · ctx:
-        {sampleRateContexto ?? '—'}Hz · sesión:{tipoSesionAudioActual}
-      </div>
+      {/* DEBUG TEMPORAL: solo con ?debug=1. Borrar este bloque cuando termine el diagnóstico. */}
+      {debug && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 8,
+            left: 8,
+            zIndex: 2,
+            padding: '4px 6px',
+            borderRadius: 4,
+            background: 'rgba(0, 0, 0, 0.55)',
+            color: '#fff',
+            fontFamily: 'monospace',
+            fontSize: 11,
+            lineHeight: 1.3,
+            pointerEvents: 'none',
+          }}
+        >
+          {infoVideo.ancho} x {infoVideo.alto} · AR {infoVideo.relacion} · {infoVideo.facingMode} ·{' '}
+          {mimeTypeElegido || 'sin mime'} · rec:{estadoRecorder}
+          <br />
+          audio: {infoAudio.sampleRate}Hz · {infoAudio.channelCount}ch · ec:
+          {infoAudio.echoCancellation ? 'on' : 'off'} · ns:
+          {infoAudio.noiseSuppression ? 'on' : 'off'} · agc:
+          {infoAudio.autoGainControl ? 'on' : 'off'} · ctx:
+          {sampleRateContexto ?? '—'}Hz · sesión:{tipoSesionAudioActual}
+          <br />
+          wakeLock: {wakeLockActivo ? 'activo' : 'inactivo'}
+        </div>
+      )}
 
       {estadoGrabacion === 'grabando' && (
         <div
@@ -776,29 +854,6 @@ export default function Camara() {
             pointerEvents: 'none',
           }}
         >
-          {/* DEBUG TEMPORAL: botón de prueba de sonido, borrar junto con probarSonido(). */}
-          <button
-            type="button"
-            onClick={probarSonido}
-            style={{
-              minWidth: 150,
-              minHeight: 60,
-              padding: '0 24px',
-              border: 'none',
-              borderRadius: 999,
-              background: 'rgba(255, 255, 255, 0.92)',
-              color: '#000',
-              fontSize: 18,
-              fontWeight: 700,
-              boxShadow: '0 4px 16px rgba(0, 0, 0, 0.35)',
-              touchAction: 'manipulation',
-              WebkitTapHighlightColor: 'transparent',
-              pointerEvents: 'auto',
-            }}
-          >
-            Probar sonido
-          </button>
-
           <button
             type="button"
             onClick={cambiarCamara}
@@ -952,6 +1007,61 @@ export default function Camara() {
             </span>
             <span>MB/min: {mbPorMinuto}</span>
           </div>
+
+          {errorCompartir && (
+            <p
+              role="alert"
+              style={{
+                margin: 0,
+                padding: '10px 14px',
+                borderRadius: 10,
+                background: 'rgba(214, 40, 57, 0.9)',
+                color: '#fff',
+                fontSize: 15,
+                lineHeight: 1.4,
+              }}
+            >
+              {errorCompartir}
+            </p>
+          )}
+
+          {puedeCompartir && (
+            <button
+              type="button"
+              onClick={compartir}
+              style={{
+                minHeight: 64,
+                border: 'none',
+                borderRadius: 999,
+                background: '#d62839',
+                color: '#fff',
+                fontSize: 20,
+                fontWeight: 700,
+                touchAction: 'manipulation',
+                WebkitTapHighlightColor: 'transparent',
+              }}
+            >
+              Compartir / Guardar
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={descargar}
+            style={{
+              minHeight: 60,
+              border: 'none',
+              borderRadius: 999,
+              background: 'rgba(255, 255, 255, 0.92)',
+              color: '#000',
+              fontSize: 18,
+              fontWeight: 700,
+              touchAction: 'manipulation',
+              WebkitTapHighlightColor: 'transparent',
+            }}
+          >
+            Descargar
+          </button>
 
           <button
             type="button"
