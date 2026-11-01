@@ -3,6 +3,17 @@ export const ALFABETO: string[] = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 export const CANVAS_ANCHO = 1920
 export const CANVAS_ALTO = 1080
 
+// Grabación
+export const FPS_GRABACION = 30
+export const BITRATE_VIDEO = 5_000_000
+export const BITRATE_AUDIO = 128_000
+export const AUDIO_CONSTRAINTS = {
+  echoCancellation: false,
+  noiseSuppression: false,
+  autoGainControl: false,
+  sampleRate: { ideal: 48000 },
+}
+
 // Rosco (círculo perfecto y centrado)
 export const ROSCO_CENTRO_X = 960
 export const ROSCO_CENTRO_Y = 450

@@ -1,7 +1,14 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
 
-import { CANVAS_ALTO, CANVAS_ANCHO } from './lib/config'
+import {
+  AUDIO_CONSTRAINTS,
+  BITRATE_AUDIO,
+  BITRATE_VIDEO,
+  CANVAS_ALTO,
+  CANVAS_ANCHO,
+  FPS_GRABACION,
+} from './lib/config'
 import { datosDemo } from './lib/datosDemo'
 import { dibujarFrame } from './lib/dibujo'
 import { crearMezclaAudio, elegirMimeType, type MezclaAudio } from './lib/grabacion'
@@ -109,6 +116,10 @@ export default function Camara() {
   } | null>(null)
   const [errorGrabacion, setErrorGrabacion] = useState<string | null>(null)
   const [avisoSinAudio, setAvisoSinAudio] = useState(false)
+  const [resolucionGrabacion, setResolucionGrabacion] = useState<{
+    ancho: number
+    alto: number
+  } | null>(null)
 
   // DEBUG TEMPORAL: datos del stream para diagnosticar el encuadre.
   const [infoVideo, setInfoVideo] = useState({
@@ -117,6 +128,16 @@ export default function Camara() {
     relacion: '0.00',
     facingMode: '—',
   })
+
+  // DEBUG TEMPORAL: datos del micrófono y del AudioContext.
+  const [infoAudio, setInfoAudio] = useState({
+    sampleRate: 0,
+    channelCount: 0,
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: false,
+  })
+  const [sampleRateContexto, setSampleRateContexto] = useState<number | null>(null)
 
   useEffect(() => {
     desmontadoRef.current = false
@@ -216,6 +237,20 @@ export default function Camara() {
     })
   }
 
+  // DEBUG TEMPORAL: datos de la pista de audio del micrófono.
+  function actualizarInfoAudio(stream: MediaStream) {
+    const pista = stream.getAudioTracks()[0]
+    const ajustes = pista?.getSettings()
+
+    setInfoAudio({
+      sampleRate: ajustes?.sampleRate ?? 0,
+      channelCount: ajustes?.channelCount ?? 0,
+      echoCancellation: ajustes?.echoCancellation ?? false,
+      noiseSuppression: ajustes?.noiseSuppression ?? false,
+      autoGainControl: ajustes?.autoGainControl ?? false,
+    })
+  }
+
   function soltarVideo() {
     detenerStream(videoStreamRef.current)
     videoStreamRef.current = null
@@ -274,11 +309,14 @@ export default function Camara() {
 
       if (camaraLista && !audioStreamRef.current) {
         try {
-          const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+          const audioStream = await navigator.mediaDevices.getUserMedia({
+            audio: AUDIO_CONSTRAINTS,
+          })
           if (desmontadoRef.current) {
             detenerStream(audioStream)
           } else {
             audioStreamRef.current = audioStream
+            actualizarInfoAudio(audioStream)
           }
         } catch (e) {
           if (!desmontadoRef.current) setErrorAudio(mensajeError(e, 'micrófono'))
@@ -370,9 +408,10 @@ export default function Camara() {
 
       const mezcla = crearMezclaAudio(tieneMicrofono ? mic : null)
       mezclaRef.current = mezcla
+      setSampleRateContexto(mezcla.ctx.sampleRate)
       await mezcla.ctx.resume()
 
-      const stream = canvas.captureStream(30)
+      const stream = canvas.captureStream(FPS_GRABACION)
       if (tieneMicrofono) {
         const pistaAudio = mezcla.destino.stream.getAudioTracks()[0]
         if (pistaAudio) stream.addTrack(pistaAudio)
@@ -381,7 +420,10 @@ export default function Camara() {
 
       const mimeType = mimeTypeElegido || elegirMimeType()
       setMimeTypeElegido(mimeType)
-      const opciones: MediaRecorderOptions = { videoBitsPerSecond: 8_000_000 }
+      const opciones: MediaRecorderOptions = {
+        videoBitsPerSecond: BITRATE_VIDEO,
+        audioBitsPerSecond: BITRATE_AUDIO,
+      }
       if (mimeType) opciones.mimeType = mimeType
 
       const recorder = new MediaRecorder(stream, opciones)
@@ -418,6 +460,7 @@ export default function Camara() {
         if (!desmontadoRef.current) {
           const url = URL.createObjectURL(blob)
           urlGrabacionRef.current = url
+          setResolucionGrabacion(null)
           setUrlGrabacion(url)
           setInfoGrabacion({
             mimeType: tipo,
@@ -508,8 +551,14 @@ export default function Camara() {
     setErrorGrabacion(null)
     setAvisoSinAudio(false)
     setSegundosGrabacion(0)
+    setResolucionGrabacion(null)
     setEstadoGrabacion('inactivo')
   }
+
+  const mbPorMinuto =
+    infoGrabacion && infoGrabacion.duracion > 0
+      ? ((parseFloat(infoGrabacion.tamanoMB) * 60) / infoGrabacion.duracion).toFixed(2)
+      : '—'
 
   return (
     <main
@@ -572,6 +621,12 @@ export default function Camara() {
       >
         {infoVideo.ancho} x {infoVideo.alto} · AR {infoVideo.relacion} · {infoVideo.facingMode} ·{' '}
         {mimeTypeElegido || 'sin mime'} · rec:{estadoRecorder}
+        <br />
+        audio: {infoAudio.sampleRate}Hz · {infoAudio.channelCount}ch · ec:
+        {infoAudio.echoCancellation ? 'on' : 'off'} · ns:
+        {infoAudio.noiseSuppression ? 'on' : 'off'} · agc:
+        {infoAudio.autoGainControl ? 'on' : 'off'} · ctx:
+        {sampleRateContexto ?? '—'}Hz
       </div>
 
       {estadoGrabacion === 'grabando' && (
@@ -773,6 +828,13 @@ export default function Camara() {
             controls
             playsInline
             src={urlGrabacion}
+            onLoadedMetadata={(event) => {
+              const video = event.currentTarget
+              setResolucionGrabacion({
+                ancho: video.videoWidth,
+                alto: video.videoHeight,
+              })
+            }}
             style={{
               flex: 1,
               minHeight: 0,
@@ -796,6 +858,13 @@ export default function Camara() {
             <span>Formato: {infoGrabacion?.mimeType || '—'}</span>
             <span>Tamaño: {infoGrabacion?.tamanoMB ?? '0.00'} MB</span>
             <span>Duración: {formatearTiempo(infoGrabacion?.duracion ?? 0)}</span>
+            <span>
+              Resolución:{' '}
+              {resolucionGrabacion
+                ? `${resolucionGrabacion.ancho} x ${resolucionGrabacion.alto}`
+                : '—'}
+            </span>
+            <span>MB/min: {mbPorMinuto}</span>
           </div>
 
           <button
