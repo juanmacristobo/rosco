@@ -58,8 +58,15 @@ async function reproducir(video: HTMLVideoElement) {
 }
 
 function reajustarEncuadre(video: HTMLVideoElement) {
-  // Safari a veces no aplica object-fit al cambiar el stream; alternar el valor
-  // y forzar un cálculo de layout hace que vuelva a aplicar el encuadre elegido.
+  // Safari a veces conserva el tamaño intrínseco del stream al cambiarlo.
+  // Fijamos explícitamente el tamaño al viewport, forzamos layout y reaplicamos
+  // object-fit para que el video siempre ocupe el máximo de pantalla.
+  video.style.position = 'fixed'
+  video.style.inset = '0'
+  video.style.width = '100vw'
+  video.style.height = '100dvh'
+  video.style.maxWidth = 'none'
+  video.style.maxHeight = 'none'
   video.style.objectFit = 'cover'
   video.getBoundingClientRect()
   video.style.objectFit = 'contain'
@@ -89,6 +96,26 @@ export default function Camara() {
       detenerStream(audioStreamRef.current)
       videoStreamRef.current = null
       audioStreamRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    const video = videoRef.current
+    const reajustar = () => {
+      const actual = videoRef.current
+      if (actual) reajustarEncuadre(actual)
+    }
+
+    window.addEventListener('resize', reajustar)
+    window.addEventListener('orientationchange', reajustar)
+    window.visualViewport?.addEventListener('resize', reajustar)
+    video?.addEventListener('resize', reajustar)
+
+    return () => {
+      window.removeEventListener('resize', reajustar)
+      window.removeEventListener('orientationchange', reajustar)
+      window.visualViewport?.removeEventListener('resize', reajustar)
+      video?.removeEventListener('resize', reajustar)
     }
   }, [])
 
@@ -229,12 +256,17 @@ export default function Camara() {
         muted
         onLoadedMetadata={(event) => reajustarEncuadre(event.currentTarget)}
         style={{
-          position: 'absolute',
+          position: 'fixed',
           inset: 0,
           display: 'block',
-          width: '100%',
-          height: '100%',
+          width: '100vw',
+          height: '100dvh',
+          maxWidth: 'none',
+          maxHeight: 'none',
           objectFit: 'contain',
+          background: '#000',
+          pointerEvents: 'none',
+          zIndex: 0,
         }}
       />
 
@@ -251,6 +283,7 @@ export default function Camara() {
             height: 70,
             fontSize: 24,
             touchAction: 'manipulation',
+            zIndex: 1,
           }}
         >
           {iniciando ? 'Abriendo…' : 'Empezar'}
