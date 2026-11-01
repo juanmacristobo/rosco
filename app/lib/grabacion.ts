@@ -12,6 +12,28 @@ export type MezclaAudio = {
   conectar: (nodo: AudioNode) => void
 }
 
+type TipoSesionAudio = 'auto' | 'playback' | 'play-and-record'
+
+type NavigatorConSesionAudio = Navigator & {
+  audioSession?: { type: TipoSesionAudio }
+}
+
+export function leerTipoSesionAudio(): string {
+  const nav = navigator as NavigatorConSesionAudio
+  return nav.audioSession?.type ?? 'no soportado'
+}
+
+export function establecerTipoSesionAudio(tipo: TipoSesionAudio) {
+  const nav = navigator as NavigatorConSesionAudio
+  if (!nav.audioSession) return
+
+  try {
+    nav.audioSession.type = tipo
+  } catch {
+    // Algunos navegadores exponen la API pero no permiten cambiarla.
+  }
+}
+
 export function elegirMimeType(): string {
   if (typeof MediaRecorder === 'undefined') return ''
 

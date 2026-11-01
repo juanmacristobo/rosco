@@ -11,7 +11,13 @@ import {
 } from './lib/config'
 import { datosDemo } from './lib/datosDemo'
 import { dibujarFrame } from './lib/dibujo'
-import { crearMezclaAudio, elegirMimeType, type MezclaAudio } from './lib/grabacion'
+import {
+  crearMezclaAudio,
+  elegirMimeType,
+  establecerTipoSesionAudio,
+  leerTipoSesionAudio,
+  type MezclaAudio,
+} from './lib/grabacion'
 
 type FacingMode = 'environment' | 'user'
 type EstadoGrabacion = 'inactivo' | 'grabando' | 'revisando'
@@ -94,6 +100,7 @@ export default function Camara() {
   const duracionGrabacionRef = useRef(0)
   const intervaloRecRef = useRef<number | null>(null)
   const urlGrabacionRef = useRef<string | null>(null)
+  const preparandoGrabacionRef = useRef(false)
 
   const [activa, setActiva] = useState(false)
   const [facingMode, setFacingMode] = useState<FacingMode>('environment')
@@ -138,6 +145,7 @@ export default function Camara() {
     autoGainControl: false,
   })
   const [sampleRateContexto, setSampleRateContexto] = useState<number | null>(null)
+  const [tipoSesionAudioActual, setTipoSesionAudioActual] = useState('no soportado')
 
   useEffect(() => {
     desmontadoRef.current = false
@@ -274,10 +282,9 @@ export default function Camara() {
     setErrorCamara(null)
     setErrorAudio(null)
     setMimeTypeElegido(elegirMimeType())
+    setTipoSesionAudioActual(leerTipoSesionAudio())
 
     try {
-      let camaraLista = false
-
       try {
         const stream = await pedirVideo(facingMode)
         if (desmontadoRef.current) {
@@ -301,26 +308,9 @@ export default function Camara() {
         }
 
         setActiva(true)
-        camaraLista = true
       } catch (e) {
         soltarVideo()
         if (!desmontadoRef.current) setErrorCamara(mensajeError(e, 'cámara'))
-      }
-
-      if (camaraLista && !audioStreamRef.current) {
-        try {
-          const audioStream = await navigator.mediaDevices.getUserMedia({
-            audio: AUDIO_CONSTRAINTS,
-          })
-          if (desmontadoRef.current) {
-            detenerStream(audioStream)
-          } else {
-            audioStreamRef.current = audioStream
-            actualizarInfoAudio(audioStream)
-          }
-        } catch (e) {
-          if (!desmontadoRef.current) setErrorAudio(mensajeError(e, 'micrófono'))
-        }
       }
     } finally {
       iniciandoRef.current = false
@@ -380,6 +370,9 @@ export default function Camara() {
       intervaloRecRef.current = null
     }
 
+    detenerStream(audioStreamRef.current)
+    audioStreamRef.current = null
+
     streamGrabacionRef.current?.getTracks().forEach((track) => track.stop())
     streamGrabacionRef.current = null
 
@@ -391,7 +384,7 @@ export default function Camara() {
   }
 
   async function empezarGrabacion() {
-    if (estadoGrabacion !== 'inactivo' || !activa) return
+    if (preparandoGrabacionRef.current || estadoGrabacion !== 'inactivo' || !activa) return
 
     const canvas = canvasRef.current
     if (!canvas) {
@@ -399,17 +392,42 @@ export default function Camara() {
       return
     }
 
+    preparandoGrabacionRef.current = true
     setErrorGrabacion(null)
+    setErrorAudio(null)
     setAvisoSinAudio(false)
 
     try {
-      const mic = audioStreamRef.current
-      const tieneMicrofono = !!mic && mic.getAudioTracks().length > 0
+      establecerTipoSesionAudio('play-and-record')
+      setTipoSesionAudioActual(leerTipoSesionAudio())
 
-      const mezcla = crearMezclaAudio(tieneMicrofono ? mic : null)
+      const mezcla = crearMezclaAudio(null)
       mezclaRef.current = mezcla
       setSampleRateContexto(mezcla.ctx.sampleRate)
       await mezcla.ctx.resume()
+
+      let tieneMicrofono = false
+      try {
+        const mic = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS })
+        if (desmontadoRef.current) {
+          detenerStream(mic)
+          liberarGrabacion()
+          return
+        }
+
+        audioStreamRef.current = mic
+        actualizarInfoAudio(mic)
+        const fuente = mezcla.ctx.createMediaStreamSource(mic)
+        mezcla.conectar(fuente)
+        tieneMicrofono = true
+      } catch (e) {
+        if (!desmontadoRef.current) setErrorAudio(mensajeError(e, 'micrófono'))
+      }
+
+      if (desmontadoRef.current) {
+        liberarGrabacion()
+        return
+      }
 
       const stream = canvas.captureStream(FPS_GRABACION)
       if (tieneMicrofono) {
@@ -458,6 +476,8 @@ export default function Camara() {
         chunksRef.current = []
 
         if (!desmontadoRef.current) {
+          establecerTipoSesionAudio('playback')
+          setTipoSesionAudioActual(leerTipoSesionAudio())
           const url = URL.createObjectURL(blob)
           urlGrabacionRef.current = url
           setResolucionGrabacion(null)
@@ -513,6 +533,8 @@ export default function Camara() {
             : 'No se pudo iniciar la grabación.'
         )
       }
+    } finally {
+      preparandoGrabacionRef.current = false
     }
   }
 
@@ -553,6 +575,47 @@ export default function Camara() {
     setSegundosGrabacion(0)
     setResolucionGrabacion(null)
     setEstadoGrabacion('inactivo')
+  }
+
+  // DEBUG TEMPORAL: beep de prueba para verificar el ruteo de audio.
+  async function probarSonido() {
+    try {
+      const mezclaActiva = mezclaRef.current
+      const mezcla = mezclaActiva ?? crearMezclaAudio(null)
+
+      await mezcla.ctx.resume()
+
+      const ahora = mezcla.ctx.currentTime
+      const oscilador = mezcla.ctx.createOscillator()
+      const ganancia = mezcla.ctx.createGain()
+
+      oscilador.type = 'sine'
+      oscilador.frequency.setValueAtTime(880, ahora)
+
+      ganancia.gain.setValueAtTime(0.3, ahora)
+      ganancia.gain.exponentialRampToValueAtTime(0.001, ahora + 0.4)
+
+      oscilador.connect(ganancia)
+      ganancia.connect(mezcla.destino)
+      ganancia.connect(mezcla.ctx.destination)
+
+      oscilador.start(ahora)
+      oscilador.stop(ahora + 0.4)
+
+      if (!mezclaActiva) {
+        window.setTimeout(() => {
+          void mezcla.ctx.close().catch(() => undefined)
+        }, 600)
+      }
+    } catch (e) {
+      if (!desmontadoRef.current) {
+        setErrorGrabacion(
+          e instanceof Error
+            ? `No se pudo reproducir el sonido de prueba: ${e.message}`
+            : 'No se pudo reproducir el sonido de prueba.'
+        )
+      }
+    }
   }
 
   const mbPorMinuto =
@@ -626,7 +689,7 @@ export default function Camara() {
         {infoAudio.echoCancellation ? 'on' : 'off'} · ns:
         {infoAudio.noiseSuppression ? 'on' : 'off'} · agc:
         {infoAudio.autoGainControl ? 'on' : 'off'} · ctx:
-        {sampleRateContexto ?? '—'}Hz
+        {sampleRateContexto ?? '—'}Hz · sesión:{tipoSesionAudioActual}
       </div>
 
       {estadoGrabacion === 'grabando' && (
@@ -713,6 +776,29 @@ export default function Camara() {
             pointerEvents: 'none',
           }}
         >
+          {/* DEBUG TEMPORAL: botón de prueba de sonido, borrar junto con probarSonido(). */}
+          <button
+            type="button"
+            onClick={probarSonido}
+            style={{
+              minWidth: 150,
+              minHeight: 60,
+              padding: '0 24px',
+              border: 'none',
+              borderRadius: 999,
+              background: 'rgba(255, 255, 255, 0.92)',
+              color: '#000',
+              fontSize: 18,
+              fontWeight: 700,
+              boxShadow: '0 4px 16px rgba(0, 0, 0, 0.35)',
+              touchAction: 'manipulation',
+              WebkitTapHighlightColor: 'transparent',
+              pointerEvents: 'auto',
+            }}
+          >
+            Probar sonido
+          </button>
+
           <button
             type="button"
             onClick={cambiarCamara}
