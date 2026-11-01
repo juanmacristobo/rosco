@@ -4,8 +4,10 @@ import { useEffect, useRef, useState } from 'react'
 import { CANVAS_ALTO, CANVAS_ANCHO } from './lib/config'
 import { datosDemo } from './lib/datosDemo'
 import { dibujarFrame } from './lib/dibujo'
+import { crearMezclaAudio, elegirMimeType, type MezclaAudio } from './lib/grabacion'
 
 type FacingMode = 'environment' | 'user'
+type EstadoGrabacion = 'inactivo' | 'grabando' | 'revisando'
 
 function detenerStream(stream: MediaStream | null) {
   stream?.getTracks().forEach((track) => track.stop())
@@ -61,6 +63,13 @@ async function reproducir(video: HTMLVideoElement) {
   }
 }
 
+function formatearTiempo(segundos: number) {
+  const total = Math.max(0, Math.floor(segundos))
+  const minutos = Math.floor(total / 60)
+  const resto = total % 60
+  return `${String(minutos).padStart(2, '0')}:${String(resto).padStart(2, '0')}`
+}
+
 export default function Camara() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -70,6 +79,14 @@ export default function Camara() {
   const desmontadoRef = useRef(false)
   const iniciandoRef = useRef(false)
   const cambiandoRef = useRef(false)
+  const recorderRef = useRef<MediaRecorder | null>(null)
+  const chunksRef = useRef<Blob[]>([])
+  const streamGrabacionRef = useRef<MediaStream | null>(null)
+  const mezclaRef = useRef<MezclaAudio | null>(null)
+  const inicioGrabacionRef = useRef(0)
+  const duracionGrabacionRef = useRef(0)
+  const intervaloRecRef = useRef<number | null>(null)
+  const urlGrabacionRef = useRef<string | null>(null)
 
   const [activa, setActiva] = useState(false)
   const [facingMode, setFacingMode] = useState<FacingMode>('environment')
@@ -79,6 +96,19 @@ export default function Camara() {
   const [errorAudio, setErrorAudio] = useState<string | null>(null)
   const [vertical, setVertical] = useState(false)
   const [yaHorizontal, setYaHorizontal] = useState(false)
+
+  const [estadoGrabacion, setEstadoGrabacion] = useState<EstadoGrabacion>('inactivo')
+  const [estadoRecorder, setEstadoRecorder] = useState<MediaRecorder['state']>('inactive')
+  const [mimeTypeElegido, setMimeTypeElegido] = useState('')
+  const [segundosGrabacion, setSegundosGrabacion] = useState(0)
+  const [urlGrabacion, setUrlGrabacion] = useState<string | null>(null)
+  const [infoGrabacion, setInfoGrabacion] = useState<{
+    mimeType: string
+    tamanoMB: string
+    duracion: number
+  } | null>(null)
+  const [errorGrabacion, setErrorGrabacion] = useState<string | null>(null)
+  const [avisoSinAudio, setAvisoSinAudio] = useState(false)
 
   // DEBUG TEMPORAL: datos del stream para diagnosticar el encuadre.
   const [infoVideo, setInfoVideo] = useState({
@@ -97,6 +127,34 @@ export default function Camara() {
         cancelAnimationFrame(rafRef.current)
         rafRef.current = null
       }
+
+      if (intervaloRecRef.current !== null) {
+        clearInterval(intervaloRecRef.current)
+        intervaloRecRef.current = null
+      }
+
+      const recorder = recorderRef.current
+      if (recorder && recorder.state !== 'inactive') {
+        try {
+          recorder.stop()
+        } catch {
+          // Ignorar: el componente ya se está desmontando.
+        }
+      }
+      recorderRef.current = null
+
+      streamGrabacionRef.current?.getTracks().forEach((track) => track.stop())
+      streamGrabacionRef.current = null
+
+      const mezcla = mezclaRef.current
+      mezclaRef.current = null
+      if (mezcla) void mezcla.ctx.close().catch(() => undefined)
+
+      if (urlGrabacionRef.current) {
+        URL.revokeObjectURL(urlGrabacionRef.current)
+        urlGrabacionRef.current = null
+      }
+
       detenerStream(videoStreamRef.current)
       detenerStream(audioStreamRef.current)
       videoStreamRef.current = null
@@ -180,6 +238,7 @@ export default function Camara() {
     setIniciando(true)
     setErrorCamara(null)
     setErrorAudio(null)
+    setMimeTypeElegido(elegirMimeType())
 
     try {
       let camaraLista = false
@@ -277,6 +336,181 @@ export default function Camara() {
     }
   }
 
+  function liberarGrabacion() {
+    if (intervaloRecRef.current !== null) {
+      clearInterval(intervaloRecRef.current)
+      intervaloRecRef.current = null
+    }
+
+    streamGrabacionRef.current?.getTracks().forEach((track) => track.stop())
+    streamGrabacionRef.current = null
+
+    const mezcla = mezclaRef.current
+    mezclaRef.current = null
+    if (mezcla) void mezcla.ctx.close().catch(() => undefined)
+
+    recorderRef.current = null
+  }
+
+  async function empezarGrabacion() {
+    if (estadoGrabacion !== 'inactivo' || !activa) return
+
+    const canvas = canvasRef.current
+    if (!canvas) {
+      setErrorGrabacion('No se encontró el canvas para grabar.')
+      return
+    }
+
+    setErrorGrabacion(null)
+    setAvisoSinAudio(false)
+
+    try {
+      const mic = audioStreamRef.current
+      const tieneMicrofono = !!mic && mic.getAudioTracks().length > 0
+
+      const mezcla = crearMezclaAudio(tieneMicrofono ? mic : null)
+      mezclaRef.current = mezcla
+      await mezcla.ctx.resume()
+
+      const stream = canvas.captureStream(30)
+      if (tieneMicrofono) {
+        const pistaAudio = mezcla.destino.stream.getAudioTracks()[0]
+        if (pistaAudio) stream.addTrack(pistaAudio)
+      }
+      streamGrabacionRef.current = stream
+
+      const mimeType = mimeTypeElegido || elegirMimeType()
+      setMimeTypeElegido(mimeType)
+      const opciones: MediaRecorderOptions = { videoBitsPerSecond: 8_000_000 }
+      if (mimeType) opciones.mimeType = mimeType
+
+      const recorder = new MediaRecorder(stream, opciones)
+      recorderRef.current = recorder
+      chunksRef.current = []
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) chunksRef.current.push(event.data)
+      }
+
+      recorder.onstart = () => {
+        if (!desmontadoRef.current) setEstadoRecorder('recording')
+      }
+
+      recorder.onerror = () => {
+        if (desmontadoRef.current) return
+        setErrorGrabacion('Ocurrió un error al grabar el video.')
+        setEstadoRecorder('inactive')
+      }
+
+      recorder.onstop = () => {
+        if (intervaloRecRef.current !== null) {
+          clearInterval(intervaloRecRef.current)
+          intervaloRecRef.current = null
+        }
+
+        const tipo = recorder.mimeType || mimeType || 'video/webm'
+        const blob = new Blob(chunksRef.current, { type: tipo })
+        const duracion =
+          duracionGrabacionRef.current ||
+          (performance.now() - inicioGrabacionRef.current) / 1000
+        chunksRef.current = []
+
+        if (!desmontadoRef.current) {
+          const url = URL.createObjectURL(blob)
+          urlGrabacionRef.current = url
+          setUrlGrabacion(url)
+          setInfoGrabacion({
+            mimeType: tipo,
+            tamanoMB: (blob.size / (1024 * 1024)).toFixed(2),
+            duracion,
+          })
+          setEstadoRecorder('inactive')
+          setEstadoGrabacion('revisando')
+        }
+
+        liberarGrabacion()
+      }
+
+      inicioGrabacionRef.current = performance.now()
+      duracionGrabacionRef.current = 0
+      setSegundosGrabacion(0)
+      setAvisoSinAudio(!tieneMicrofono)
+      setEstadoRecorder('recording')
+      setEstadoGrabacion('grabando')
+
+      recorder.start(1000)
+
+      intervaloRecRef.current = window.setInterval(() => {
+        setSegundosGrabacion((performance.now() - inicioGrabacionRef.current) / 1000)
+      }, 250)
+    } catch (e) {
+      const recorder = recorderRef.current
+      if (recorder) {
+        recorder.onstop = null
+        recorder.ondataavailable = null
+        recorder.onerror = null
+        if (recorder.state !== 'inactive') {
+          try {
+            recorder.stop()
+          } catch {
+            // Ignorar: la grabación ya falló.
+          }
+        }
+      }
+
+      liberarGrabacion()
+
+      if (!desmontadoRef.current) {
+        setEstadoGrabacion('inactivo')
+        setEstadoRecorder('inactive')
+        setAvisoSinAudio(false)
+        setErrorGrabacion(
+          e instanceof Error
+            ? `No se pudo iniciar la grabación: ${e.message}`
+            : 'No se pudo iniciar la grabación.'
+        )
+      }
+    }
+  }
+
+  function detenerGrabacion() {
+    const recorder = recorderRef.current
+    if (!recorder || recorder.state === 'inactive') return
+
+    duracionGrabacionRef.current = (performance.now() - inicioGrabacionRef.current) / 1000
+    setSegundosGrabacion(duracionGrabacionRef.current)
+
+    if (intervaloRecRef.current !== null) {
+      clearInterval(intervaloRecRef.current)
+      intervaloRecRef.current = null
+    }
+
+    try {
+      recorder.stop()
+    } catch {
+      liberarGrabacion()
+      if (!desmontadoRef.current) {
+        setEstadoGrabacion('inactivo')
+        setEstadoRecorder('inactive')
+        setErrorGrabacion('No se pudo detener la grabación.')
+      }
+    }
+  }
+
+  function grabarDeNuevo() {
+    if (urlGrabacionRef.current) {
+      URL.revokeObjectURL(urlGrabacionRef.current)
+      urlGrabacionRef.current = null
+    }
+
+    setUrlGrabacion(null)
+    setInfoGrabacion(null)
+    setErrorGrabacion(null)
+    setAvisoSinAudio(false)
+    setSegundosGrabacion(0)
+    setEstadoGrabacion('inactivo')
+  }
+
   return (
     <main
       style={{
@@ -336,8 +570,55 @@ export default function Camara() {
           pointerEvents: 'none',
         }}
       >
-        {infoVideo.ancho} x {infoVideo.alto} · AR {infoVideo.relacion} · {infoVideo.facingMode}
+        {infoVideo.ancho} x {infoVideo.alto} · AR {infoVideo.relacion} · {infoVideo.facingMode} ·{' '}
+        {mimeTypeElegido || 'sin mime'} · rec:{estadoRecorder}
       </div>
+
+      {estadoGrabacion === 'grabando' && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 'calc(env(safe-area-inset-top, 0px) + 16px)',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 3,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '6px 12px',
+            borderRadius: 999,
+            background: 'rgba(0, 0, 0, 0.6)',
+            color: '#fff',
+            fontFamily: 'monospace',
+            fontSize: 18,
+            fontWeight: 700,
+            pointerEvents: 'none',
+          }}
+        >
+          <span style={{ color: '#ff3b30' }}>●</span> REC {formatearTiempo(segundosGrabacion)}
+        </div>
+      )}
+
+      {estadoGrabacion === 'grabando' && avisoSinAudio && (
+        <div
+          style={{
+            position: 'absolute',
+            left: 16,
+            right: 16,
+            bottom: 'calc(env(safe-area-inset-bottom, 0px) + 100px)',
+            zIndex: 2,
+            padding: '8px 12px',
+            borderRadius: 10,
+            background: 'rgba(0, 0, 0, 0.7)',
+            color: '#fff',
+            fontSize: 14,
+            textAlign: 'center',
+            pointerEvents: 'none',
+          }}
+        >
+          Grabando sin micrófono: el video no tendrá audio.
+        </div>
+      )}
 
       {!activa && (
         <button
@@ -359,7 +640,7 @@ export default function Camara() {
         </button>
       )}
 
-      {activa && (
+      {activa && estadoGrabacion !== 'revisando' && (
         <div
           style={{
             position: 'absolute',
@@ -369,6 +650,8 @@ export default function Camara() {
             zIndex: 1,
             display: 'flex',
             justifyContent: 'flex-end',
+            alignItems: 'flex-end',
+            gap: 12,
             paddingLeft: 'calc(env(safe-area-inset-left, 0px) + 16px)',
             paddingRight: 'calc(env(safe-area-inset-right, 0px) + 16px)',
             paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 24px)',
@@ -399,10 +682,32 @@ export default function Camara() {
           >
             {cambiando ? 'Cambiando…' : 'Cambiar cámara'}
           </button>
+
+          <button
+            type="button"
+            onClick={estadoGrabacion === 'grabando' ? detenerGrabacion : empezarGrabacion}
+            style={{
+              minWidth: 150,
+              minHeight: 60,
+              padding: '0 24px',
+              border: 'none',
+              borderRadius: 999,
+              background: estadoGrabacion === 'grabando' ? '#ffffff' : '#d62839',
+              color: estadoGrabacion === 'grabando' ? '#d62839' : '#ffffff',
+              fontSize: 18,
+              fontWeight: 700,
+              boxShadow: '0 4px 16px rgba(0, 0, 0, 0.35)',
+              touchAction: 'manipulation',
+              WebkitTapHighlightColor: 'transparent',
+              pointerEvents: 'auto',
+            }}
+          >
+            {estadoGrabacion === 'grabando' ? 'Detener' : 'Grabar'}
+          </button>
         </div>
       )}
 
-      {(errorCamara || errorAudio) && (
+      {(errorCamara || errorAudio || errorGrabacion) && (
         <div
           role="alert"
           style={{
@@ -421,6 +726,9 @@ export default function Camara() {
         >
           {errorCamara && <p style={{ margin: 0 }}>{errorCamara}</p>}
           {errorAudio && <p style={{ margin: errorCamara ? '8px 0 0' : 0 }}>{errorAudio}</p>}
+          {errorGrabacion && (
+            <p style={{ margin: errorCamara || errorAudio ? '8px 0 0' : 0 }}>{errorGrabacion}</p>
+          )}
         </div>
       )}
 
@@ -442,6 +750,71 @@ export default function Camara() {
           }}
         >
           Girá el teléfono a horizontal
+        </div>
+      )}
+
+      {estadoGrabacion === 'revisando' && urlGrabacion && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 20,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 12,
+            paddingTop: 'calc(env(safe-area-inset-top, 0px) + 16px)',
+            paddingRight: 'calc(env(safe-area-inset-right, 0px) + 16px)',
+            paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 16px)',
+            paddingLeft: 'calc(env(safe-area-inset-left, 0px) + 16px)',
+            background: 'rgba(0, 0, 0, 0.95)',
+          }}
+        >
+          <video
+            controls
+            playsInline
+            src={urlGrabacion}
+            style={{
+              flex: 1,
+              minHeight: 0,
+              width: '100%',
+              objectFit: 'contain',
+              background: '#000',
+              borderRadius: 12,
+            }}
+          />
+
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: '6px 16px',
+              color: '#fff',
+              fontFamily: 'monospace',
+              fontSize: 13,
+            }}
+          >
+            <span>Formato: {infoGrabacion?.mimeType || '—'}</span>
+            <span>Tamaño: {infoGrabacion?.tamanoMB ?? '0.00'} MB</span>
+            <span>Duración: {formatearTiempo(infoGrabacion?.duracion ?? 0)}</span>
+          </div>
+
+          <button
+            type="button"
+            onClick={grabarDeNuevo}
+            style={{
+              minHeight: 60,
+              border: 'none',
+              borderRadius: 999,
+              background: 'rgba(255, 255, 255, 0.92)',
+              color: '#000',
+              fontSize: 18,
+              fontWeight: 700,
+              touchAction: 'manipulation',
+              WebkitTapHighlightColor: 'transparent',
+            }}
+          >
+            Grabar de nuevo
+          </button>
         </div>
       )}
     </main>
