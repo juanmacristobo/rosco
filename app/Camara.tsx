@@ -1,6 +1,10 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
 
+import { CANVAS_ALTO, CANVAS_ANCHO } from './lib/config'
+import { datosDemo } from './lib/datosDemo'
+import { dibujarFrame } from './lib/dibujo'
+
 type FacingMode = 'environment' | 'user'
 
 function detenerStream(stream: MediaStream | null) {
@@ -59,6 +63,8 @@ async function reproducir(video: HTMLVideoElement) {
 
 export default function Camara() {
   const videoRef = useRef<HTMLVideoElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const rafRef = useRef<number | null>(null)
   const videoStreamRef = useRef<MediaStream | null>(null)
   const audioStreamRef = useRef<MediaStream | null>(null)
   const desmontadoRef = useRef(false)
@@ -85,12 +91,41 @@ export default function Camara() {
 
     return () => {
       desmontadoRef.current = true
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current)
+        rafRef.current = null
+      }
       detenerStream(videoStreamRef.current)
       detenerStream(audioStreamRef.current)
       videoStreamRef.current = null
       audioStreamRef.current = null
     }
   }, [])
+
+  useEffect(() => {
+    if (!activa) return
+
+    const canvas = canvasRef.current
+    const video = videoRef.current
+    if (!canvas || !video) return
+
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
+    const dibujar = () => {
+      dibujarFrame(ctx, video, datosDemo)
+      rafRef.current = requestAnimationFrame(dibujar)
+    }
+
+    rafRef.current = requestAnimationFrame(dibujar)
+
+    return () => {
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current)
+        rafRef.current = null
+      }
+    }
+  }, [activa])
 
   // DEBUG TEMPORAL: actualiza los datos del stream en loadedmetadata y resize.
   function actualizarInfoVideo(video: HTMLVideoElement) {
@@ -235,6 +270,21 @@ export default function Camara() {
         overflow: 'hidden',
       }}
     >
+      <canvas
+        ref={canvasRef}
+        width={CANVAS_ANCHO}
+        height={CANVAS_ALTO}
+        style={{
+          position: 'absolute',
+          inset: 0,
+          width: '100%',
+          height: '100%',
+          objectFit: 'contain',
+          background: '#000',
+          zIndex: 0,
+        }}
+      />
+
       <video
         ref={videoRef}
         playsInline
@@ -242,14 +292,13 @@ export default function Camara() {
         onLoadedMetadata={(event) => actualizarInfoVideo(event.currentTarget)}
         onResize={(event) => actualizarInfoVideo(event.currentTarget)}
         style={{
-          position: 'absolute',
-          inset: 0,
-          width: '100%',
-          height: '100%',
-          objectFit: 'cover',
-          background: '#000',
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          width: 1,
+          height: 1,
+          opacity: 0,
           pointerEvents: 'none',
-          zIndex: 0,
         }}
       />
 
