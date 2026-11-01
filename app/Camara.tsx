@@ -57,21 +57,6 @@ async function reproducir(video: HTMLVideoElement) {
   }
 }
 
-function reajustarEncuadre(video: HTMLVideoElement) {
-  // Safari a veces conserva el tamaño intrínseco del stream al cambiarlo.
-  // Fijamos explícitamente el tamaño al viewport, forzamos layout y reaplicamos
-  // object-fit para que el video siempre ocupe el máximo de pantalla.
-  video.style.position = 'fixed'
-  video.style.inset = '0'
-  video.style.width = '100vw'
-  video.style.height = '100dvh'
-  video.style.maxWidth = 'none'
-  video.style.maxHeight = 'none'
-  video.style.objectFit = 'cover'
-  video.getBoundingClientRect()
-  video.style.objectFit = 'contain'
-}
-
 export default function Camara() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const videoStreamRef = useRef<MediaStream | null>(null)
@@ -87,6 +72,14 @@ export default function Camara() {
   const [errorCamara, setErrorCamara] = useState<string | null>(null)
   const [errorAudio, setErrorAudio] = useState<string | null>(null)
 
+  // DEBUG TEMPORAL: datos del stream para diagnosticar el encuadre.
+  const [infoVideo, setInfoVideo] = useState({
+    ancho: 0,
+    alto: 0,
+    relacion: '0.00',
+    facingMode: '—',
+  })
+
   useEffect(() => {
     desmontadoRef.current = false
 
@@ -99,25 +92,19 @@ export default function Camara() {
     }
   }, [])
 
-  useEffect(() => {
-    const video = videoRef.current
-    const reajustar = () => {
-      const actual = videoRef.current
-      if (actual) reajustarEncuadre(actual)
-    }
+  // DEBUG TEMPORAL: actualiza los datos del stream en loadedmetadata y resize.
+  function actualizarInfoVideo(video: HTMLVideoElement) {
+    const stream = video.srcObject
+    const track = stream instanceof MediaStream ? stream.getVideoTracks()[0] : null
+    const facingModeReal = track?.getSettings().facingMode
 
-    window.addEventListener('resize', reajustar)
-    window.addEventListener('orientationchange', reajustar)
-    window.visualViewport?.addEventListener('resize', reajustar)
-    video?.addEventListener('resize', reajustar)
-
-    return () => {
-      window.removeEventListener('resize', reajustar)
-      window.removeEventListener('orientationchange', reajustar)
-      window.visualViewport?.removeEventListener('resize', reajustar)
-      video?.removeEventListener('resize', reajustar)
-    }
-  }, [])
+    setInfoVideo({
+      ancho: video.videoWidth,
+      alto: video.videoHeight,
+      relacion: video.videoHeight ? (video.videoWidth / video.videoHeight).toFixed(2) : '0.00',
+      facingMode: facingModeReal ?? '—',
+    })
+  }
 
   function soltarVideo() {
     detenerStream(videoStreamRef.current)
@@ -167,7 +154,6 @@ export default function Camara() {
           return
         }
 
-        reajustarEncuadre(video)
         setActiva(true)
         camaraLista = true
       } catch (e) {
@@ -226,7 +212,6 @@ export default function Camara() {
         return
       }
 
-      reajustarEncuadre(video)
       setFacingMode(nuevoFacingMode)
     } catch (e) {
       soltarVideo()
@@ -254,21 +239,39 @@ export default function Camara() {
         ref={videoRef}
         playsInline
         muted
-        onLoadedMetadata={(event) => reajustarEncuadre(event.currentTarget)}
+        onLoadedMetadata={(event) => actualizarInfoVideo(event.currentTarget)}
+        onResize={(event) => actualizarInfoVideo(event.currentTarget)}
         style={{
-          position: 'fixed',
+          position: 'absolute',
           inset: 0,
-          display: 'block',
-          width: '100vw',
-          height: '100dvh',
-          maxWidth: 'none',
-          maxHeight: 'none',
-          objectFit: 'contain',
+          width: '100%',
+          height: '100%',
+          objectFit: 'cover',
           background: '#000',
           pointerEvents: 'none',
           zIndex: 0,
         }}
       />
+
+      {/* DEBUG TEMPORAL: borrar este bloque cuando termine el diagnóstico. */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 8,
+          left: 8,
+          zIndex: 2,
+          padding: '4px 6px',
+          borderRadius: 4,
+          background: 'rgba(0, 0, 0, 0.55)',
+          color: '#fff',
+          fontFamily: 'monospace',
+          fontSize: 11,
+          lineHeight: 1.3,
+          pointerEvents: 'none',
+        }}
+      >
+        {infoVideo.ancho} x {infoVideo.alto} · AR {infoVideo.relacion} · {infoVideo.facingMode}
+      </div>
 
       {!activa && (
         <button
