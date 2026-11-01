@@ -78,6 +78,7 @@ export default function Camara() {
   const [errorCamara, setErrorCamara] = useState<string | null>(null)
   const [errorAudio, setErrorAudio] = useState<string | null>(null)
   const [vertical, setVertical] = useState(false)
+  const [yaHorizontal, setYaHorizontal] = useState(false)
 
   // DEBUG TEMPORAL: datos del stream para diagnosticar el encuadre.
   const [infoVideo, setInfoVideo] = useState({
@@ -105,7 +106,12 @@ export default function Camara() {
 
   useEffect(() => {
     const consulta = window.matchMedia('(orientation: portrait)')
-    const actualizar = () => setVertical(consulta.matches)
+    const actualizar = () => {
+      setVertical(consulta.matches)
+      // El aviso es solo para el primer ingreso: una vez que se llegó a
+      // horizontal, no vuelve a mostrarse aunque el teléfono se gire.
+      if (!consulta.matches) setYaHorizontal(true)
+    }
 
     actualizar()
     consulta.addEventListener('change', actualizar)
@@ -418,7 +424,7 @@ export default function Camara() {
         </div>
       )}
 
-      {vertical && (
+      {vertical && !activa && !yaHorizontal && (
         <div
           style={{
             position: 'fixed',
