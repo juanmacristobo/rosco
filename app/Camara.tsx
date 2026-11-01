@@ -2,6 +2,11 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import {
+  borrarGrabacion,
+  cargarGrabacion,
+  guardarGrabacion,
+} from './lib/almacenamiento'
+import {
   AUDIO_CONSTRAINTS,
   BITRATE_AUDIO,
   BITRATE_VIDEO,
@@ -92,6 +97,16 @@ function crearNombreArchivo(mimeType: string) {
   return `rosco-${fecha}-${hora}.${extension}`
 }
 
+function formatearFecha(ms: number) {
+  return new Date(ms).toLocaleString('es-AR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
 function suscribirDebug() {
   return () => {}
 }
@@ -153,8 +168,52 @@ export default function Camara() {
   const [puedeCompartir, setPuedeCompartir] = useState(false)
   const [errorCompartir, setErrorCompartir] = useState<string | null>(null)
   const [wakeLockActivo, setWakeLockActivo] = useState(false)
+  const [cargandoRespaldo, setCargandoRespaldo] = useState(true)
+  const [estadoRespaldo, setEstadoRespaldo] = useState<'guardando' | 'ok' | 'error' | null>(
+    null
+  )
+  const [avisoRecuperada, setAvisoRecuperada] = useState<string | null>(null)
+  const [infoPersistencia, setInfoPersistencia] = useState<{
+    persistido: string
+    usoMB: string
+    cuotaMB: string
+  } | null>(null)
 
   const debug = useSyncExternalStore(suscribirDebug, leerDebug, leerDebugServidor)
+
+  const actualizarInfoPersistencia = useCallback(async (pedirPersist: boolean) => {
+    let persistido = pedirPersist ? 'no soportado' : '—'
+
+    if (pedirPersist) {
+      try {
+        if (typeof navigator.storage?.persist === 'function') {
+          persistido = (await navigator.storage.persist()) ? 'true' : 'false'
+        }
+      } catch {
+        persistido = 'error'
+      }
+    }
+
+    let usoMB = '—'
+    let cuotaMB = '—'
+    try {
+      const estimacion = await navigator.storage?.estimate?.()
+      if (estimacion) {
+        usoMB = ((estimacion.usage ?? 0) / (1024 * 1024)).toFixed(1)
+        cuotaMB = ((estimacion.quota ?? 0) / (1024 * 1024)).toFixed(1)
+      }
+    } catch {
+      // Sin estimate: se deja el valor por defecto.
+    }
+
+    if (desmontadoRef.current) return
+
+    setInfoPersistencia((prev) => ({
+      persistido: pedirPersist ? persistido : (prev?.persistido ?? persistido),
+      usoMB,
+      cuotaMB,
+    }))
+  }, [])
 
   const pedirWakeLock = useCallback(async () => {
     if (!navigator.wakeLock) return
@@ -249,6 +308,48 @@ export default function Camara() {
       audioStreamRef.current = null
     }
   }, [soltarWakeLock])
+
+  useEffect(() => {
+    let cancelado = false
+
+    void (async () => {
+      const registro = await cargarGrabacion()
+      if (cancelado || desmontadoRef.current) return
+
+      if (registro) {
+        const tipo = registro.mimeType || registro.blob.type || 'video/webm'
+        const archivo = new File([registro.blob], registro.nombre, {
+          type: tipo.split(';')[0],
+        })
+        const url = URL.createObjectURL(archivo)
+        urlGrabacionRef.current = url
+        fileRef.current = archivo
+        setPuedeCompartir(navigator.canShare?.({ files: [archivo] }) ?? false)
+        setErrorCompartir(null)
+        setUrlGrabacion(url)
+        setInfoGrabacion({
+          mimeType: tipo,
+          tamanoMB: (registro.blob.size / (1024 * 1024)).toFixed(2),
+          duracion: registro.duracionMs / 1000,
+        })
+        setAvisoRecuperada(
+          `Recuperamos tu última grabación (${formatearFecha(registro.creadoEn)})`
+        )
+        setEstadoGrabacion('revisando')
+      }
+
+      setCargandoRespaldo(false)
+    })()
+
+    return () => {
+      cancelado = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!debug) return
+    void actualizarInfoPersistencia(false)
+  }, [debug, actualizarInfoPersistencia])
 
   // Wake Lock: al volver a la pestaña, si se sigue grabando, se pide de nuevo.
   useEffect(() => {
@@ -568,8 +669,24 @@ export default function Camara() {
             tamanoMB: (blob.size / (1024 * 1024)).toFixed(2),
             duracion,
           })
+          setAvisoRecuperada(null)
           setEstadoRecorder('inactive')
           setEstadoGrabacion('revisando')
+          setEstadoRespaldo('guardando')
+
+          void (async () => {
+            await actualizarInfoPersistencia(true)
+            const ok = await guardarGrabacion({
+              blob,
+              mimeType: tipo,
+              duracionMs: Math.round(duracion * 1000),
+              creadoEn: Date.now(),
+              nombre: archivo.name,
+            })
+            await actualizarInfoPersistencia(false)
+            if (desmontadoRef.current) return
+            setEstadoRespaldo(ok ? 'ok' : 'error')
+          })()
         }
 
         liberarGrabacion()
@@ -646,10 +763,14 @@ export default function Camara() {
   }
 
   function grabarDeNuevo() {
+    if (!window.confirm('¿Descartar este video? Si no lo guardaste, se pierde.')) return
+
     if (urlGrabacionRef.current) {
       URL.revokeObjectURL(urlGrabacionRef.current)
       urlGrabacionRef.current = null
     }
+
+    void borrarGrabacion()
 
     setUrlGrabacion(null)
     setInfoGrabacion(null)
@@ -660,6 +781,8 @@ export default function Camara() {
     fileRef.current = null
     setPuedeCompartir(false)
     setErrorCompartir(null)
+    setEstadoRespaldo(null)
+    setAvisoRecuperada(null)
     setEstadoGrabacion('inactivo')
   }
 
@@ -767,6 +890,9 @@ export default function Camara() {
           {sampleRateContexto ?? '—'}Hz · sesión:{tipoSesionAudioActual}
           <br />
           wakeLock: {wakeLockActivo ? 'activo' : 'inactivo'}
+          <br />
+          persist: {infoPersistencia?.persistido ?? '—'} · uso:{' '}
+          {infoPersistencia?.usoMB ?? '—'} MB / cuota: {infoPersistencia?.cuotaMB ?? '—'} MB
         </div>
       )}
 
@@ -816,7 +942,7 @@ export default function Camara() {
         </div>
       )}
 
-      {!activa && (
+      {!activa && estadoGrabacion !== 'revisando' && !cargandoRespaldo && (
         <button
           type="button"
           onClick={empezar}
@@ -965,6 +1091,37 @@ export default function Camara() {
             background: 'rgba(0, 0, 0, 0.95)',
           }}
         >
+          {avisoRecuperada && (
+            <p
+              style={{
+                margin: 0,
+                padding: '10px 14px',
+                borderRadius: 10,
+                background: 'rgba(255, 255, 255, 0.12)',
+                color: '#fff',
+                fontSize: 15,
+                lineHeight: 1.4,
+              }}
+            >
+              {avisoRecuperada}
+            </p>
+          )}
+
+          {estadoRespaldo && (
+            <p
+              style={{
+                margin: 0,
+                color: estadoRespaldo === 'error' ? '#ffd60a' : '#fff',
+                fontSize: 14,
+                lineHeight: 1.4,
+              }}
+            >
+              {estadoRespaldo === 'guardando' && 'Guardando copia de respaldo…'}
+              {estadoRespaldo === 'ok' && '✓ Copia de respaldo guardada'}
+              {estadoRespaldo === 'error' && '⚠ No se pudo guardar la copia de respaldo'}
+            </p>
+          )}
+
           <video
             controls
             playsInline
@@ -1078,7 +1235,7 @@ export default function Camara() {
               WebkitTapHighlightColor: 'transparent',
             }}
           >
-            Grabar de nuevo
+            Descartar y grabar de nuevo
           </button>
         </div>
       )}
