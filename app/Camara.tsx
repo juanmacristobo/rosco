@@ -14,6 +14,7 @@ import {
   CANVAS_ANCHO,
   FPS_GRABACION,
   RESULTADOS_GRABADOS_MS,
+  SEGUNDOS_ALERTA_FINAL,
 } from './lib/config'
 import { crearJugadoresDemo } from './lib/datosDemo'
 import { dibujarFrame, type DatosDibujo } from './lib/dibujo'
@@ -32,6 +33,12 @@ import {
   leerTipoSesionAudio,
   type MezclaAudio,
 } from './lib/grabacion'
+import {
+  crearSonidos,
+  NOMBRES_SONIDOS,
+  type NombreSonido,
+  type Sonidos,
+} from './lib/sonidos'
 
 type FacingMode = 'environment' | 'user'
 type EstadoGrabacion = 'inactivo' | 'grabando' | 'revisando'
@@ -156,6 +163,19 @@ function textoRespuestaOperador(juego: Juego): string | null {
   return `${letra.letra} · ${letra.respuesta}`.toUpperCase()
 }
 
+function sonidoDeAccion(accion: AccionJuego): NombreSonido | null {
+  switch (accion.tipo) {
+    case 'CORRECTA':
+      return 'acierto'
+    case 'ERROR':
+      return 'error'
+    case 'PASAPALABRA':
+      return 'pasapalabra'
+    default:
+      return null
+  }
+}
+
 function suscribirDebug() {
   return () => {}
 }
@@ -181,6 +201,9 @@ export default function Camara() {
   const chunksRef = useRef<Blob[]>([])
   const streamGrabacionRef = useRef<MediaStream | null>(null)
   const mezclaRef = useRef<MezclaAudio | null>(null)
+  const sonidosRef = useRef<Sonidos | null>(null)
+  const ultimoNumeroCuentaRef = useRef<number | null>(null)
+  const ultimoSegundoAvisoRef = useRef<number | null>(null)
   const tramoInicioRef = useRef(0)
   const acumuladoGrabadoRef = useRef(0)
   const pausadoRef = useRef(false)
@@ -272,6 +295,94 @@ export default function Camara() {
     }
   }
 
+  // Capa de efectos de sonido: reacciona a las acciones aceptadas y a los
+  // cambios de fase, sin usar estado de React por frame.
+  function reproducirEfectosSonido(
+    anterior: Juego,
+    siguiente: Juego,
+    accion: AccionJuego
+  ) {
+    const sonidos = sonidosRef.current
+    if (!sonidos || accion.tipo === 'REINICIAR') return
+
+    const ahora = accion.ahora
+
+    if (anterior.fase === 'jugando') {
+      const sonido = sonidoDeAccion(accion)
+      if (sonido) {
+        const jugadorAntes = anterior.jugadores[anterior.turno]
+        const jugadorDespues = siguiente.jugadores[anterior.turno]
+        const indice = jugadorAntes?.letraActual ?? -1
+        const letraAntes = jugadorAntes?.rosco[indice]
+        const letraDespues = jugadorDespues?.rosco[indice]
+        if (
+          letraAntes &&
+          letraDespues &&
+          letraAntes.estado !== letraDespues.estado
+        ) {
+          sonidos.reproducir(sonido)
+        }
+      }
+    }
+
+    if (anterior.fase === 'jugando' && siguiente.fase !== 'jugando') {
+      const antes = anterior.jugadores[anterior.turno]
+      const despues = siguiente.jugadores[anterior.turno]
+      if (
+        antes &&
+        despues &&
+        antes.tiempoRestanteMs > 0 &&
+        despues.tiempoRestanteMs <= 0
+      ) {
+        ultimoSegundoAvisoRef.current = null
+        sonidos.reproducir('tiempoAgotado')
+      }
+    }
+
+    if (siguiente.fase !== anterior.fase) {
+      if (siguiente.fase === 'cuentaRegresiva') {
+        ultimoNumeroCuentaRef.current = null
+      }
+
+      if (anterior.fase === 'cuentaRegresiva' && siguiente.fase === 'jugando') {
+        ultimoSegundoAvisoRef.current = null
+        sonidos.reproducir('ya')
+      }
+
+      if (siguiente.fase === 'fin') {
+        sonidos.reproducir('fin')
+      }
+    }
+
+    if (siguiente.fase === 'cuentaRegresiva' && siguiente.finFaseTs !== null) {
+      const numero = Math.max(
+        1,
+        Math.ceil((siguiente.finFaseTs - ahora) / 1000)
+      )
+      if (numero !== ultimoNumeroCuentaRef.current) {
+        ultimoNumeroCuentaRef.current = numero
+        sonidos.reproducir('tic')
+      }
+    }
+
+    if (siguiente.fase === 'jugando') {
+      if (anterior.fase !== 'jugando' || anterior.turno !== siguiente.turno) {
+        ultimoSegundoAvisoRef.current = null
+      }
+
+      const jugador = siguiente.jugadores[siguiente.turno]
+      const segundos = Math.ceil((jugador?.tiempoRestanteMs ?? 0) / 1000)
+      if (
+        segundos > 0 &&
+        segundos <= SEGUNDOS_ALERTA_FINAL &&
+        segundos !== ultimoSegundoAvisoRef.current
+      ) {
+        ultimoSegundoAvisoRef.current = segundos
+        sonidos.reproducir('tic')
+      }
+    }
+  }
+
   function dispatch(accion: AccionJuego) {
     const anterior = juegoRef.current
     const siguiente = reducirJuego(anterior, accion)
@@ -289,6 +400,7 @@ export default function Camara() {
     }
 
     manejarTransicion(anterior, siguiente)
+    reproducirEfectosSonido(anterior, siguiente, accion)
   }
 
   useEffect(() => {
@@ -417,6 +529,7 @@ export default function Camara() {
 
       const mezcla = mezclaRef.current
       mezclaRef.current = null
+      sonidosRef.current = null
       if (mezcla) void mezcla.ctx.close().catch(() => undefined)
 
       if (urlGrabacionRef.current) {
@@ -683,6 +796,9 @@ export default function Camara() {
 
     const mezcla = mezclaRef.current
     mezclaRef.current = null
+    sonidosRef.current = null
+    ultimoNumeroCuentaRef.current = null
+    ultimoSegundoAvisoRef.current = null
     if (mezcla) void mezcla.ctx.close().catch(() => undefined)
 
     recorderRef.current = null
@@ -708,6 +824,7 @@ export default function Camara() {
 
       const mezcla = crearMezclaAudio(null)
       mezclaRef.current = mezcla
+      sonidosRef.current = crearSonidos(mezcla.ctx, mezcla.destino)
       setSampleRateContexto(mezcla.ctx.sampleRate)
       await mezcla.ctx.resume()
 
@@ -1128,6 +1245,11 @@ export default function Camara() {
           <br />
           persist: {infoPersistencia?.persistido ?? '—'} · uso:{' '}
           {infoPersistencia?.usoMB ?? '—'} MB / cuota: {infoPersistencia?.cuotaMB ?? '—'} MB
+          <br />
+          sonidos:{' '}
+          {NOMBRES_SONIDOS.map(
+            (nombre) => `${nombre}:${sonidosRef.current?.cargados[nombre] ?? '—'}`
+          ).join(' · ')}
         </div>
       )}
 

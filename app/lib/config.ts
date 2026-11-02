@@ -10,6 +10,11 @@ export const CUENTA_REGRESIVA_MS = 3_000
 export const COLA_TURNO_MS = 3_000
 export const RESULTADOS_GRABADOS_MS = 3_000
 
+// Sonidos
+export const GANANCIA_SONIDOS_GRABACION = 1.0
+export const GANANCIA_SONIDOS_PARLANTE = 1.0
+export const SEGUNDOS_ALERTA_FINAL = 10
+
 // Grabación
 export const FPS_GRABACION = 30
 export const BITRATE_VIDEO = 5_000_000

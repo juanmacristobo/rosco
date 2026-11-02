@@ -1,0 +1,25 @@
+Sonidos del juego
+=================
+
+Por defecto, todos los sonidos se generan con osciladores (sintéticos), así
+que no hace falta ningún archivo para jugar.
+
+Si querés reemplazar un sonido sintético por uno propio, poné un archivo MP3
+en esta misma carpeta usando exactamente estos nombres:
+
+  acierto.mp3       -> respuesta correcta
+  error.mp3         -> respuesta incorrecta
+  pasapalabra.mp3   -> pasapalabra
+  tic.mp3           -> cuenta regresiva y últimos segundos
+  ya.mp3            -> comienza el turno
+  tiempoAgotado.mp3 -> se acabó el tiempo del jugador
+  fin.mp3           -> fin de la partida
+
+Cada archivo se carga en segundo plano al iniciar la partida. Si no existe o
+no se puede decodificar, ese sonido vuelve a usar la versión sintética.
+
+Los sonidos se escuchan por el parlante y también quedan mezclados en la
+grabación del video.
+
+Para ver desde qué origen se está usando cada sonido, abrí la página con
+?debug=1.
