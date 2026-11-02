@@ -40,3 +40,15 @@ Single-package Next.js App Router app. There is no `src/`: routes live in `app/`
 ## Environment
 
 - `.env*` is gitignored; Next.js loads `.env*` by default. No custom env loader or deployment config exists.
+
+## Reglas del proyecto
+
+- Web mobile pensada primero para iPhone Safari (y Android Chrome): graba partidas de rosco de Pasapalabra con cámara y overlay.
+- Lo que se ve y se graba es el `<canvas>` de 1920x1080 en horizontal; los botones y overlays HTML no aparecen en el video. La lógica de dibujo vive en `app/lib/`.
+- Todo el código de cámara, canvas, audio y grabación es Client Component y se carga con `dynamic` y `ssr: false`.
+- Los textos de interfaz van en español rioplatense.
+- No instalar dependencias nuevas salvo que se pida explícitamente.
+- Los datos pesados (videos) van en IndexedDB, nunca en `localStorage`.
+- Si `lint`, `tsc --noEmit` y `build` pasan sin errores, se permite commit y push a la rama actual. Nunca usar `--force`. Si algo falla, frenar y reportar sin improvisar.
+- No agregar atribuciones de coautor (`Co-authored-by`) en los commits.
+- Trabajar de a un paso por vez y no agregar funcionalidades que no se pidieron.
