@@ -11,8 +11,8 @@ export const COLA_TURNO_MS = 3_000
 export const RESULTADOS_GRABADOS_MS = 3_000
 
 // Sonidos
-export const GANANCIA_SONIDOS_GRABACION = 1.0
-export const GANANCIA_SONIDOS_PARLANTE = 1.0
+export const GANANCIA_SONIDOS_GRABACION = 0.4
+export const GANANCIA_SONIDOS_PARLANTE = 0.35
 export const SEGUNDOS_ALERTA_FINAL = 10
 
 // Grabación
