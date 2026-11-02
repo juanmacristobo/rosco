@@ -12,7 +12,6 @@ import type { EstadoLetra, FaseJuego, ResultadoJuego } from './juego'
 export type MarcadorJugador = {
   nombre: string
   segundos: number
-  aciertos: number
   enTurno: boolean
 }
 
@@ -21,7 +20,6 @@ export type DatosDibujo = {
   letraActiva: number
   jugador: string
   segundos: number
-  aciertos: number
   pista: string
   fase: FaseJuego
   marcador: MarcadorJugador[]
@@ -48,17 +46,14 @@ const GROSOR_CONTORNO = 8
 const MARGEN_TEXTO = 48
 const JUGADOR_X = MARGEN_TEXTO
 const JUGADOR_Y = 64
-const ACIERTOS_X = MARGEN_TEXTO
-const ACIERTOS_Y = 124
 const RELOJ_X = CANVAS_ANCHO - MARGEN_TEXTO
 const RELOJ_Y = 80
 const FUENTE_JUGADOR = 'bold 52px sans-serif'
-const FUENTE_ACIERTOS = 'bold 40px sans-serif'
 const FUENTE_RELOJ = 'bold 84px sans-serif'
 
 // Marcador
 const MARCADOR_X = MARGEN_TEXTO
-const MARCADOR_Y = 172
+const MARCADOR_Y = 124
 const MARCADOR_ALTO = 36
 const FUENTE_MARCADOR = 'bold 26px sans-serif'
 
@@ -311,7 +306,7 @@ function dibujarMarcador(ctx: CanvasRenderingContext2D, marcador: MarcadorJugado
   marcador.forEach((jugador, indice) => {
     const y = MARCADOR_Y + indice * MARCADOR_ALTO
     const prefijo = jugador.enTurno ? '▶ ' : '   '
-    const texto = `${prefijo}${jugador.nombre}  ${formatearReloj(jugador.segundos)}  ·  ${jugador.aciertos} aciertos`
+    const texto = `${prefijo}${jugador.nombre}  ${formatearReloj(jugador.segundos)}`
     dibujarTextoConContorno(
       ctx,
       texto,
@@ -326,9 +321,6 @@ function dibujarMarcador(ctx: CanvasRenderingContext2D, marcador: MarcadorJugado
 function dibujarTextos(ctx: CanvasRenderingContext2D, datos: DatosDibujo) {
   ctx.font = FUENTE_JUGADOR
   dibujarTextoConContorno(ctx, datos.jugador, JUGADOR_X, JUGADOR_Y, 'left')
-
-  ctx.font = FUENTE_ACIERTOS
-  dibujarTextoConContorno(ctx, `Aciertos: ${datos.aciertos}`, ACIERTOS_X, ACIERTOS_Y, 'left')
 
   ctx.font = FUENTE_RELOJ
   dibujarTextoConContorno(ctx, formatearReloj(datos.segundos), RELOJ_X, RELOJ_Y, 'right')

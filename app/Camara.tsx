@@ -18,7 +18,6 @@ import {
 import { crearJugadoresDemo } from './lib/datosDemo'
 import { dibujarFrame, type DatosDibujo } from './lib/dibujo'
 import {
-  contarAciertos,
   crearJuego,
   reducirJuego,
   resultados,
@@ -130,7 +129,6 @@ function construirDatosDibujo(juego: Juego, ahora: number): DatosDibujo {
     letraActiva: jugador && !jugador.terminado ? jugador.letraActual : -1,
     jugador: jugador?.nombre ?? '',
     segundos: Math.ceil((jugador?.tiempoRestanteMs ?? 0) / 1000),
-    aciertos: jugador ? contarAciertos(jugador) : 0,
     pista: letra
       ? `${letra.tipo === 'empieza' ? 'Empieza' : 'Contiene'} con la ${letra.letra}: ${letra.pista}`
       : '',
@@ -138,7 +136,6 @@ function construirDatosDibujo(juego: Juego, ahora: number): DatosDibujo {
     marcador: juego.jugadores.map((actual, indice) => ({
       nombre: actual.nombre,
       segundos: Math.ceil(actual.tiempoRestanteMs / 1000),
-      aciertos: contarAciertos(actual),
       enTurno: indice === juego.turno,
     })),
     cartel:
@@ -148,6 +145,15 @@ function construirDatosDibujo(juego: Juego, ahora: number): DatosDibujo {
     cuentaRegresiva,
     resultados: juego.fase === 'fin' ? resultados(juego) : null,
   }
+}
+
+function textoRespuestaOperador(juego: Juego): string | null {
+  if (juego.fase !== 'cuentaRegresiva' && juego.fase !== 'jugando') return null
+  const jugador = juego.jugadores[juego.turno]
+  if (!jugador || jugador.terminado) return null
+  const letra = jugador.rosco[jugador.letraActual]
+  if (!letra) return null
+  return `${letra.letra} · ${letra.respuesta}`.toUpperCase()
 }
 
 function suscribirDebug() {
@@ -188,6 +194,7 @@ export default function Camara() {
   const wakeLockPendienteRef = useRef(false)
   const juegoRef = useRef<Juego>(crearJuego(crearJugadoresDemo()))
   const dispatchRef = useRef<(accion: AccionJuego) => void>(() => {})
+  const respuestaOperadorRef = useRef<string | null>(null)
 
   const [activa, setActiva] = useState(false)
   const [facingMode, setFacingMode] = useState<FacingMode>('environment')
@@ -202,6 +209,7 @@ export default function Camara() {
   const [estadoRecorder, setEstadoRecorder] = useState<MediaRecorder['state']>('inactive')
   const [faseJuego, setFaseJuego] = useState<FaseJuego>('listo')
   const [turnoJuego, setTurnoJuego] = useState(0)
+  const [respuestaOperador, setRespuestaOperador] = useState<string | null>(null)
   const [recPausado, setRecPausado] = useState(false)
   const [avisoPausa, setAvisoPausa] = useState<string | null>(null)
   const [mimeTypeElegido, setMimeTypeElegido] = useState('')
@@ -272,6 +280,12 @@ export default function Camara() {
     if (siguiente.fase !== anterior.fase || siguiente.turno !== anterior.turno) {
       setFaseJuego(siguiente.fase)
       setTurnoJuego(siguiente.turno)
+    }
+
+    const respuesta = textoRespuestaOperador(siguiente)
+    if (respuesta !== respuestaOperadorRef.current) {
+      respuestaOperadorRef.current = respuesta
+      setRespuestaOperador(respuesta)
     }
 
     manejarTransicion(anterior, siguiente)
@@ -1117,6 +1131,29 @@ export default function Camara() {
         </div>
       )}
 
+      {respuestaOperador && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 'calc(env(safe-area-inset-top, 0px) + 56px)',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 5,
+            padding: '6px 12px',
+            borderRadius: 8,
+            background: 'rgba(0, 0, 0, 0.68)',
+            color: '#fff',
+            fontSize: 16,
+            fontWeight: 700,
+            letterSpacing: 0.5,
+            whiteSpace: 'nowrap',
+            pointerEvents: 'none',
+          }}
+        >
+          {respuestaOperador}
+        </div>
+      )}
+
       {estadoGrabacion === 'grabando' && (
         <div
           style={{
@@ -1215,13 +1252,13 @@ export default function Camara() {
             disabled={cambiando || iniciando}
             aria-busy={cambiando}
             style={{
-              height: 40,
-              padding: '0 14px',
+              height: 32,
+              padding: '0 10px',
               border: 'none',
               borderRadius: 999,
               background: 'rgba(255, 255, 255, 0.92)',
               color: '#000',
-              fontSize: 14,
+              fontSize: 12,
               fontWeight: 700,
               whiteSpace: 'nowrap',
               boxShadow: '0 4px 16px rgba(0, 0, 0, 0.35)',
@@ -1239,13 +1276,13 @@ export default function Camara() {
               type="button"
               onClick={detenerYReiniciar}
               style={{
-                height: 40,
-                padding: '0 14px',
+                height: 32,
+                padding: '0 10px',
                 border: 'none',
                 borderRadius: 999,
                 background: '#ffffff',
                 color: '#d62839',
-                fontSize: 14,
+                fontSize: 12,
                 fontWeight: 700,
                 whiteSpace: 'nowrap',
                 boxShadow: '0 4px 16px rgba(0, 0, 0, 0.35)',
@@ -1305,14 +1342,14 @@ export default function Camara() {
               type="button"
               onClick={() => dispatch({ tipo: 'ERROR', ahora: performance.now() })}
               style={{
-                minWidth: 200,
-                minHeight: 96,
-                padding: '0 24px',
+                minWidth: 150,
+                minHeight: 72,
+                padding: '0 16px',
                 border: 'none',
                 borderRadius: 24,
                 background: 'rgba(214, 40, 57, 0.82)',
                 color: '#ffffff',
-                fontSize: 28,
+                fontSize: 21,
                 fontWeight: 800,
                 boxShadow: '0 4px 18px rgba(0, 0, 0, 0.4)',
                 touchAction: 'manipulation',
@@ -1326,14 +1363,14 @@ export default function Camara() {
               type="button"
               onClick={() => dispatch({ tipo: 'PASAPALABRA', ahora: performance.now() })}
               style={{
-                minWidth: 200,
-                minHeight: 96,
-                padding: '0 24px',
+                minWidth: 150,
+                minHeight: 72,
+                padding: '0 16px',
                 border: 'none',
                 borderRadius: 24,
                 background: 'rgba(244, 180, 0, 0.85)',
                 color: '#1a1a1a',
-                fontSize: 28,
+                fontSize: 21,
                 fontWeight: 800,
                 boxShadow: '0 4px 18px rgba(0, 0, 0, 0.4)',
                 touchAction: 'manipulation',
@@ -1352,14 +1389,14 @@ export default function Camara() {
               right: 'calc(env(safe-area-inset-right, 0px) + 16px)',
               bottom: 'calc(env(safe-area-inset-bottom, 0px) + 104px)',
               zIndex: 4,
-              minWidth: 250,
-              minHeight: 150,
-              padding: '0 28px',
+              minWidth: 188,
+              minHeight: 112,
+              padding: '0 20px',
               border: 'none',
               borderRadius: 28,
               background: 'rgba(34, 168, 69, 0.82)',
               color: '#ffffff',
-              fontSize: 38,
+              fontSize: 28,
               fontWeight: 800,
               boxShadow: '0 6px 24px rgba(0, 0, 0, 0.4)',
               touchAction: 'manipulation',
