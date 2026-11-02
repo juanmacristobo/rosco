@@ -3,6 +3,13 @@ export const ALFABETO: string[] = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 export const CANVAS_ANCHO = 1920
 export const CANVAS_ALTO = 1080
 
+// Juego
+export const TIEMPO_POR_JUGADOR_MS = 150_000
+export const DELTA_MAX_TICK_MS = 1_000
+export const CUENTA_REGRESIVA_MS = 3_000
+export const COLA_TURNO_MS = 3_000
+export const RESULTADOS_GRABADOS_MS = 3_000
+
 // Grabación
 export const FPS_GRABACION = 30
 export const BITRATE_VIDEO = 5_000_000

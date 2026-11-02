@@ -13,9 +13,19 @@ import {
   CANVAS_ALTO,
   CANVAS_ANCHO,
   FPS_GRABACION,
+  RESULTADOS_GRABADOS_MS,
 } from './lib/config'
-import { datosDemo } from './lib/datosDemo'
-import { dibujarFrame } from './lib/dibujo'
+import { crearJugadoresDemo } from './lib/datosDemo'
+import { dibujarFrame, type DatosDibujo } from './lib/dibujo'
+import {
+  contarAciertos,
+  crearJuego,
+  reducirJuego,
+  resultados,
+  type AccionJuego,
+  type FaseJuego,
+  type Juego,
+} from './lib/juego'
 import {
   crearMezclaAudio,
   elegirMimeType,
@@ -107,6 +117,39 @@ function formatearFecha(ms: number) {
   })
 }
 
+function construirDatosDibujo(juego: Juego, ahora: number): DatosDibujo {
+  const jugador = juego.jugadores[juego.turno]
+  const letra = jugador && !jugador.terminado ? jugador.rosco[jugador.letraActual] : undefined
+  const cuentaRegresiva =
+    juego.fase === 'cuentaRegresiva' && juego.finFaseTs !== null
+      ? Math.max(1, Math.ceil((juego.finFaseTs - ahora) / 1000))
+      : null
+
+  return {
+    estados: jugador ? jugador.rosco.map((item) => item.estado) : [],
+    letraActiva: jugador && !jugador.terminado ? jugador.letraActual : -1,
+    jugador: jugador?.nombre ?? '',
+    segundos: Math.ceil((jugador?.tiempoRestanteMs ?? 0) / 1000),
+    aciertos: jugador ? contarAciertos(jugador) : 0,
+    pista: letra
+      ? `${letra.tipo === 'empieza' ? 'Empieza' : 'Contiene'} con la ${letra.letra}: ${letra.pista}`
+      : '',
+    fase: juego.fase,
+    marcador: juego.jugadores.map((actual, indice) => ({
+      nombre: actual.nombre,
+      segundos: Math.ceil(actual.tiempoRestanteMs / 1000),
+      aciertos: contarAciertos(actual),
+      enTurno: indice === juego.turno,
+    })),
+    cartel:
+      juego.fase === 'cuentaRegresiva' || juego.fase === 'esperandoTurno'
+        ? `TURNO DE ${(jugador?.nombre ?? '').toUpperCase()}`
+        : null,
+    cuentaRegresiva,
+    resultados: juego.fase === 'fin' ? resultados(juego) : null,
+  }
+}
+
 function suscribirDebug() {
   return () => {}
 }
@@ -132,13 +175,19 @@ export default function Camara() {
   const chunksRef = useRef<Blob[]>([])
   const streamGrabacionRef = useRef<MediaStream | null>(null)
   const mezclaRef = useRef<MezclaAudio | null>(null)
-  const inicioGrabacionRef = useRef(0)
+  const tramoInicioRef = useRef(0)
+  const acumuladoGrabadoRef = useRef(0)
+  const pausadoRef = useRef(false)
   const duracionGrabacionRef = useRef(0)
   const intervaloRecRef = useRef<number | null>(null)
+  const timeoutFinRef = useRef<number | null>(null)
   const urlGrabacionRef = useRef<string | null>(null)
   const preparandoGrabacionRef = useRef(false)
   const fileRef = useRef<File | null>(null)
   const wakeLockRef = useRef<WakeLockSentinel | null>(null)
+  const wakeLockPendienteRef = useRef(false)
+  const juegoRef = useRef<Juego>(crearJuego(crearJugadoresDemo()))
+  const dispatchRef = useRef<(accion: AccionJuego) => void>(() => {})
 
   const [activa, setActiva] = useState(false)
   const [facingMode, setFacingMode] = useState<FacingMode>('environment')
@@ -151,6 +200,10 @@ export default function Camara() {
 
   const [estadoGrabacion, setEstadoGrabacion] = useState<EstadoGrabacion>('inactivo')
   const [estadoRecorder, setEstadoRecorder] = useState<MediaRecorder['state']>('inactive')
+  const [faseJuego, setFaseJuego] = useState<FaseJuego>('listo')
+  const [turnoJuego, setTurnoJuego] = useState(0)
+  const [recPausado, setRecPausado] = useState(false)
+  const [avisoPausa, setAvisoPausa] = useState<string | null>(null)
   const [mimeTypeElegido, setMimeTypeElegido] = useState('')
   const [segundosGrabacion, setSegundosGrabacion] = useState(0)
   const [urlGrabacion, setUrlGrabacion] = useState<string | null>(null)
@@ -180,6 +233,53 @@ export default function Camara() {
   } | null>(null)
 
   const debug = useSyncExternalStore(suscribirDebug, leerDebug, leerDebugServidor)
+  const nombreTurno = juegoRef.current.jugadores[turnoJuego]?.nombre ?? ''
+
+  function manejarTransicion(anterior: Juego, siguiente: Juego) {
+    if (anterior.fase === siguiente.fase) return
+
+    if (anterior.fase === 'listo' && siguiente.fase === 'cuentaRegresiva') {
+      void pedirWakeLock()
+      void empezarGrabacion()
+      return
+    }
+
+    if (anterior.fase === 'cola' && siguiente.fase === 'esperandoTurno') {
+      pausarGrabacionPorTurno()
+      return
+    }
+
+    if (anterior.fase === 'esperandoTurno' && siguiente.fase === 'cuentaRegresiva') {
+      reanudarGrabacionPorTurno()
+      return
+    }
+
+    if (anterior.fase === 'cola' && siguiente.fase === 'fin') {
+      programarFinGrabacion()
+      return
+    }
+
+    if (siguiente.fase === 'listo') {
+      cancelarFinGrabacion()
+    }
+  }
+
+  function dispatch(accion: AccionJuego) {
+    const anterior = juegoRef.current
+    const siguiente = reducirJuego(anterior, accion)
+    juegoRef.current = siguiente
+
+    if (siguiente.fase !== anterior.fase || siguiente.turno !== anterior.turno) {
+      setFaseJuego(siguiente.fase)
+      setTurnoJuego(siguiente.turno)
+    }
+
+    manejarTransicion(anterior, siguiente)
+  }
+
+  useEffect(() => {
+    dispatchRef.current = dispatch
+  })
 
   const actualizarInfoPersistencia = useCallback(async (pedirPersist: boolean) => {
     let persistido = pedirPersist ? 'no soportado' : '—'
@@ -216,8 +316,9 @@ export default function Camara() {
   }, [])
 
   const pedirWakeLock = useCallback(async () => {
-    if (!navigator.wakeLock) return
+    if (!navigator.wakeLock || wakeLockRef.current || wakeLockPendienteRef.current) return
 
+    wakeLockPendienteRef.current = true
     try {
       const sentinel = await navigator.wakeLock.request('screen')
       if (desmontadoRef.current) {
@@ -234,6 +335,8 @@ export default function Camara() {
       })
     } catch {
       // Sin Wake Lock disponible: la grabación sigue igual.
+    } finally {
+      wakeLockPendienteRef.current = false
     }
   }, [])
 
@@ -278,6 +381,11 @@ export default function Camara() {
       if (intervaloRecRef.current !== null) {
         clearInterval(intervaloRecRef.current)
         intervaloRecRef.current = null
+      }
+
+      if (timeoutFinRef.current !== null) {
+        clearTimeout(timeoutFinRef.current)
+        timeoutFinRef.current = null
       }
 
       const recorder = recorderRef.current
@@ -391,7 +499,9 @@ export default function Camara() {
     if (!ctx) return
 
     const dibujar = () => {
-      dibujarFrame(ctx, video, datosDemo)
+      const ahora = performance.now()
+      dispatchRef.current({ tipo: 'TICK', ahora })
+      dibujarFrame(ctx, video, construirDatosDibujo(juegoRef.current, ahora))
       rafRef.current = requestAnimationFrame(dibujar)
     }
 
@@ -546,6 +656,11 @@ export default function Camara() {
       intervaloRecRef.current = null
     }
 
+    acumuladoGrabadoRef.current = 0
+    pausadoRef.current = false
+    duracionGrabacionRef.current = 0
+    tramoInicioRef.current = 0
+
     detenerStream(audioStreamRef.current)
     audioStreamRef.current = null
 
@@ -647,8 +762,7 @@ export default function Camara() {
         const tipo = recorder.mimeType || mimeType || 'video/webm'
         const blob = new Blob(chunksRef.current, { type: tipo })
         const duracion =
-          duracionGrabacionRef.current ||
-          (performance.now() - inicioGrabacionRef.current) / 1000
+          duracionGrabacionRef.current || tiempoGrabadoMs() / 1000
         chunksRef.current = []
 
         if (!desmontadoRef.current) {
@@ -671,6 +785,8 @@ export default function Camara() {
           })
           setAvisoRecuperada(null)
           setEstadoRecorder('inactive')
+          setRecPausado(false)
+          setAvisoPausa(null)
           setEstadoGrabacion('revisando')
           setEstadoRespaldo('guardando')
 
@@ -692,9 +808,13 @@ export default function Camara() {
         liberarGrabacion()
       }
 
-      inicioGrabacionRef.current = performance.now()
+      acumuladoGrabadoRef.current = 0
+      tramoInicioRef.current = performance.now()
+      pausadoRef.current = false
       duracionGrabacionRef.current = 0
       setSegundosGrabacion(0)
+      setRecPausado(false)
+      setAvisoPausa(null)
       setAvisoSinAudio(!tieneMicrofono)
       setEstadoRecorder('recording')
       setEstadoGrabacion('grabando')
@@ -703,7 +823,7 @@ export default function Camara() {
       void pedirWakeLock()
 
       intervaloRecRef.current = window.setInterval(() => {
-        setSegundosGrabacion((performance.now() - inicioGrabacionRef.current) / 1000)
+        setSegundosGrabacion(tiempoGrabadoMs() / 1000)
       }, 250)
     } catch (e) {
       const recorder = recorderRef.current
@@ -731,6 +851,7 @@ export default function Camara() {
             ? `No se pudo iniciar la grabación: ${e.message}`
             : 'No se pudo iniciar la grabación.'
         )
+        void pedirWakeLock()
       }
     } finally {
       preparandoGrabacionRef.current = false
@@ -741,7 +862,7 @@ export default function Camara() {
     const recorder = recorderRef.current
     if (!recorder || recorder.state === 'inactive') return
 
-    duracionGrabacionRef.current = (performance.now() - inicioGrabacionRef.current) / 1000
+    duracionGrabacionRef.current = tiempoGrabadoMs() / 1000
     setSegundosGrabacion(duracionGrabacionRef.current)
     soltarWakeLock()
 
@@ -760,6 +881,99 @@ export default function Camara() {
         setErrorGrabacion('No se pudo detener la grabación.')
       }
     }
+  }
+
+  function tiempoGrabadoMs() {
+    if (pausadoRef.current) return acumuladoGrabadoRef.current
+    return acumuladoGrabadoRef.current + (performance.now() - tramoInicioRef.current)
+  }
+
+  function pausarGrabacionPorTurno() {
+    const recorder = recorderRef.current
+    if (!recorder || recorder.state !== 'recording') return
+
+    try {
+      if (typeof recorder.pause !== 'function') {
+        throw new Error('MediaRecorder.pause no está disponible')
+      }
+
+      recorder.pause()
+      if (!pausadoRef.current) {
+        acumuladoGrabadoRef.current += performance.now() - tramoInicioRef.current
+        pausadoRef.current = true
+      }
+      if (!desmontadoRef.current) {
+        setRecPausado(true)
+        setEstadoRecorder('paused')
+        setAvisoPausa(null)
+      }
+    } catch {
+      if (!desmontadoRef.current) {
+        setAvisoPausa('pausa no disponible: sigue grabando')
+      }
+    }
+  }
+
+  function reanudarGrabacionPorTurno() {
+    const recorder = recorderRef.current
+    if (!recorder || recorder.state !== 'paused') return
+
+    try {
+      recorder.resume()
+      tramoInicioRef.current = performance.now()
+      pausadoRef.current = false
+      if (!desmontadoRef.current) {
+        setRecPausado(false)
+        setEstadoRecorder('recording')
+        setAvisoPausa(null)
+      }
+    } catch {
+      if (!desmontadoRef.current) {
+        setAvisoPausa('no se pudo reanudar la grabación')
+      }
+    }
+  }
+
+  function cancelarFinGrabacion() {
+    if (timeoutFinRef.current !== null) {
+      clearTimeout(timeoutFinRef.current)
+      timeoutFinRef.current = null
+    }
+  }
+
+  function programarFinGrabacion() {
+    cancelarFinGrabacion()
+    const recorder = recorderRef.current
+    if (!recorder || recorder.state === 'inactive') {
+      liberarGrabacion()
+      if (!desmontadoRef.current) {
+        setEstadoGrabacion('inactivo')
+        setEstadoRecorder('inactive')
+        setRecPausado(false)
+      }
+      return
+    }
+
+    timeoutFinRef.current = window.setTimeout(() => {
+      timeoutFinRef.current = null
+      detenerGrabacion()
+    }, RESULTADOS_GRABADOS_MS)
+  }
+
+  function detenerYReiniciar() {
+    const recorder = recorderRef.current
+    if (recorder && recorder.state !== 'inactive') {
+      detenerGrabacion()
+    } else {
+      liberarGrabacion()
+      if (!desmontadoRef.current) {
+        setEstadoGrabacion('inactivo')
+        setEstadoRecorder('inactive')
+        setRecPausado(false)
+      }
+    }
+
+    dispatch({ tipo: 'REINICIAR' })
   }
 
   function grabarDeNuevo() {
@@ -784,6 +998,12 @@ export default function Camara() {
     setEstadoRespaldo(null)
     setAvisoRecuperada(null)
     setEstadoGrabacion('inactivo')
+    setRecPausado(false)
+    setAvisoPausa(null)
+    duracionGrabacionRef.current = 0
+    acumuladoGrabadoRef.current = 0
+    pausadoRef.current = false
+    dispatch({ tipo: 'REINICIAR' })
   }
 
   function compartir() {
@@ -881,7 +1101,7 @@ export default function Camara() {
           }}
         >
           {infoVideo.ancho} x {infoVideo.alto} · AR {infoVideo.relacion} · {infoVideo.facingMode} ·{' '}
-          {mimeTypeElegido || 'sin mime'} · rec:{estadoRecorder}
+          {mimeTypeElegido || 'sin mime'} · rec:{estadoRecorder} · fase:{faseJuego}
           <br />
           audio: {infoAudio.sampleRate}Hz · {infoAudio.channelCount}ch · ec:
           {infoAudio.echoCancellation ? 'on' : 'off'} · ns:
@@ -890,6 +1110,7 @@ export default function Camara() {
           {sampleRateContexto ?? '—'}Hz · sesión:{tipoSesionAudioActual}
           <br />
           wakeLock: {wakeLockActivo ? 'activo' : 'inactivo'}
+          {avisoPausa ? ` · ${avisoPausa}` : ''}
           <br />
           persist: {infoPersistencia?.persistido ?? '—'} · uso:{' '}
           {infoPersistencia?.usoMB ?? '—'} MB / cuota: {infoPersistencia?.cuotaMB ?? '—'} MB
@@ -915,9 +1136,17 @@ export default function Camara() {
             fontSize: 18,
             fontWeight: 700,
             pointerEvents: 'none',
+            whiteSpace: 'nowrap',
           }}
         >
-          <span style={{ color: '#ff3b30' }}>●</span> REC {formatearTiempo(segundosGrabacion)}
+          {recPausado ? (
+            <>⏸ PAUSA</>
+          ) : (
+            <>
+              <span style={{ color: '#ff3b30' }}>●</span> REC{' '}
+              {formatearTiempo(segundosGrabacion)}
+            </>
+          )}
         </div>
       )}
 
@@ -973,7 +1202,7 @@ export default function Camara() {
             display: 'flex',
             justifyContent: 'flex-end',
             alignItems: 'flex-end',
-            gap: 12,
+            gap: 10,
             paddingLeft: 'calc(env(safe-area-inset-left, 0px) + 16px)',
             paddingRight: 'calc(env(safe-area-inset-right, 0px) + 16px)',
             paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 24px)',
@@ -986,15 +1215,15 @@ export default function Camara() {
             disabled={cambiando || iniciando}
             aria-busy={cambiando}
             style={{
-              minWidth: 180,
-              minHeight: 60,
-              padding: '0 24px',
+              height: 40,
+              padding: '0 14px',
               border: 'none',
               borderRadius: 999,
               background: 'rgba(255, 255, 255, 0.92)',
               color: '#000',
-              fontSize: 18,
+              fontSize: 14,
               fontWeight: 700,
+              whiteSpace: 'nowrap',
               boxShadow: '0 4px 16px rgba(0, 0, 0, 0.35)',
               opacity: cambiando || iniciando ? 0.6 : 1,
               touchAction: 'manipulation',
@@ -1005,28 +1234,197 @@ export default function Camara() {
             {cambiando ? 'Cambiando…' : 'Cambiar cámara'}
           </button>
 
-          <button
-            type="button"
-            onClick={estadoGrabacion === 'grabando' ? detenerGrabacion : empezarGrabacion}
+          {estadoGrabacion === 'grabando' && (
+            <button
+              type="button"
+              onClick={detenerYReiniciar}
+              style={{
+                height: 40,
+                padding: '0 14px',
+                border: 'none',
+                borderRadius: 999,
+                background: '#ffffff',
+                color: '#d62839',
+                fontSize: 14,
+                fontWeight: 700,
+                whiteSpace: 'nowrap',
+                boxShadow: '0 4px 16px rgba(0, 0, 0, 0.35)',
+                touchAction: 'manipulation',
+                WebkitTapHighlightColor: 'transparent',
+                pointerEvents: 'auto',
+              }}
+            >
+              Detener
+            </button>
+          )}
+        </div>
+      )}
+
+      {activa && faseJuego === 'listo' && estadoGrabacion === 'inactivo' && (
+        <button
+          type="button"
+          onClick={() => dispatch({ tipo: 'INICIAR', ahora: performance.now() })}
+          style={{
+            position: 'absolute',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            bottom: 'calc(env(safe-area-inset-bottom, 0px) + 96px)',
+            zIndex: 4,
+            minWidth: 300,
+            minHeight: 78,
+            padding: '0 32px',
+            border: 'none',
+            borderRadius: 24,
+            background: '#ffffff',
+            color: '#000',
+            fontSize: 28,
+            fontWeight: 800,
+            boxShadow: '0 6px 24px rgba(0, 0, 0, 0.45)',
+            touchAction: 'manipulation',
+            WebkitTapHighlightColor: 'transparent',
+          }}
+        >
+          Iniciar partida
+        </button>
+      )}
+
+      {faseJuego === 'jugando' && estadoGrabacion !== 'revisando' && (
+        <>
+          <div
             style={{
-              minWidth: 150,
-              minHeight: 60,
-              padding: '0 24px',
-              border: 'none',
-              borderRadius: 999,
-              background: estadoGrabacion === 'grabando' ? '#ffffff' : '#d62839',
-              color: estadoGrabacion === 'grabando' ? '#d62839' : '#ffffff',
-              fontSize: 18,
-              fontWeight: 700,
-              boxShadow: '0 4px 16px rgba(0, 0, 0, 0.35)',
-              touchAction: 'manipulation',
-              WebkitTapHighlightColor: 'transparent',
-              pointerEvents: 'auto',
+              position: 'absolute',
+              left: 'calc(env(safe-area-inset-left, 0px) + 16px)',
+              bottom: 'calc(env(safe-area-inset-bottom, 0px) + 104px)',
+              zIndex: 4,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 12,
             }}
           >
-            {estadoGrabacion === 'grabando' ? 'Detener' : 'Grabar'}
+            <button
+              type="button"
+              onClick={() => dispatch({ tipo: 'ERROR', ahora: performance.now() })}
+              style={{
+                minWidth: 200,
+                minHeight: 96,
+                padding: '0 24px',
+                border: 'none',
+                borderRadius: 24,
+                background: 'rgba(214, 40, 57, 0.82)',
+                color: '#ffffff',
+                fontSize: 28,
+                fontWeight: 800,
+                boxShadow: '0 4px 18px rgba(0, 0, 0, 0.4)',
+                touchAction: 'manipulation',
+                WebkitTapHighlightColor: 'transparent',
+              }}
+            >
+              Error
+            </button>
+
+            <button
+              type="button"
+              onClick={() => dispatch({ tipo: 'PASAPALABRA', ahora: performance.now() })}
+              style={{
+                minWidth: 200,
+                minHeight: 96,
+                padding: '0 24px',
+                border: 'none',
+                borderRadius: 24,
+                background: 'rgba(244, 180, 0, 0.85)',
+                color: '#1a1a1a',
+                fontSize: 28,
+                fontWeight: 800,
+                boxShadow: '0 4px 18px rgba(0, 0, 0, 0.4)',
+                touchAction: 'manipulation',
+                WebkitTapHighlightColor: 'transparent',
+              }}
+            >
+              Pasapalabra
+            </button>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => dispatch({ tipo: 'CORRECTA', ahora: performance.now() })}
+            style={{
+              position: 'absolute',
+              right: 'calc(env(safe-area-inset-right, 0px) + 16px)',
+              bottom: 'calc(env(safe-area-inset-bottom, 0px) + 104px)',
+              zIndex: 4,
+              minWidth: 250,
+              minHeight: 150,
+              padding: '0 28px',
+              border: 'none',
+              borderRadius: 28,
+              background: 'rgba(34, 168, 69, 0.82)',
+              color: '#ffffff',
+              fontSize: 38,
+              fontWeight: 800,
+              boxShadow: '0 6px 24px rgba(0, 0, 0, 0.4)',
+              touchAction: 'manipulation',
+              WebkitTapHighlightColor: 'transparent',
+            }}
+          >
+            Correcta
           </button>
-        </div>
+        </>
+      )}
+
+      {activa && faseJuego === 'esperandoTurno' && estadoGrabacion !== 'revisando' && (
+        <button
+          type="button"
+          onClick={() => dispatch({ tipo: 'SIGUIENTE_TURNO', ahora: performance.now() })}
+          style={{
+            position: 'absolute',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            bottom: 'calc(env(safe-area-inset-bottom, 0px) + 96px)',
+            zIndex: 4,
+            minWidth: 360,
+            minHeight: 84,
+            padding: '0 28px',
+            border: 'none',
+            borderRadius: 24,
+            background: '#ffffff',
+            color: '#000',
+            fontSize: 26,
+            fontWeight: 800,
+            boxShadow: '0 6px 24px rgba(0, 0, 0, 0.45)',
+            touchAction: 'manipulation',
+            WebkitTapHighlightColor: 'transparent',
+          }}
+        >
+          Empezar turno de {nombreTurno}
+        </button>
+      )}
+
+      {faseJuego === 'fin' && estadoGrabacion === 'inactivo' && (
+        <button
+          type="button"
+          onClick={() => dispatch({ tipo: 'REINICIAR' })}
+          style={{
+            position: 'absolute',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            bottom: 'calc(env(safe-area-inset-bottom, 0px) + 96px)',
+            zIndex: 4,
+            minWidth: 220,
+            minHeight: 68,
+            padding: '0 28px',
+            border: 'none',
+            borderRadius: 24,
+            background: '#ffffff',
+            color: '#000',
+            fontSize: 24,
+            fontWeight: 800,
+            boxShadow: '0 6px 24px rgba(0, 0, 0, 0.45)',
+            touchAction: 'manipulation',
+            WebkitTapHighlightColor: 'transparent',
+          }}
+        >
+          Reiniciar
+        </button>
       )}
 
       {(errorCamara || errorAudio || errorGrabacion) && (

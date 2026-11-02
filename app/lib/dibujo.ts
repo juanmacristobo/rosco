@@ -7,8 +7,14 @@ import {
   ROSCO_CENTRO_Y,
   ROSCO_RADIO,
 } from './config'
+import type { EstadoLetra, FaseJuego, ResultadoJuego } from './juego'
 
-export type EstadoLetra = 'pendiente' | 'correcta' | 'error' | 'pasapalabra'
+export type MarcadorJugador = {
+  nombre: string
+  segundos: number
+  aciertos: number
+  enTurno: boolean
+}
 
 export type DatosDibujo = {
   estados: EstadoLetra[]
@@ -17,6 +23,11 @@ export type DatosDibujo = {
   segundos: number
   aciertos: number
   pista: string
+  fase: FaseJuego
+  marcador: MarcadorJugador[]
+  cartel: string | null
+  cuentaRegresiva: number | null
+  resultados: ResultadoJuego | null
 }
 
 // Rosco
@@ -30,6 +41,8 @@ const COLOR_PASAPALABRA = '#f4b400'
 
 // Textos superiores
 const COLOR_TEXTO = '#ffffff'
+const COLOR_TEXTO_SECUNDARIO = 'rgba(255, 255, 255, 0.75)'
+const COLOR_DESTACADO = '#ffd60a'
 const COLOR_CONTORNO = 'rgba(0, 0, 0, 0.85)'
 const GROSOR_CONTORNO = 8
 const MARGEN_TEXTO = 48
@@ -43,6 +56,12 @@ const FUENTE_JUGADOR = 'bold 52px sans-serif'
 const FUENTE_ACIERTOS = 'bold 40px sans-serif'
 const FUENTE_RELOJ = 'bold 84px sans-serif'
 
+// Marcador
+const MARCADOR_X = MARGEN_TEXTO
+const MARCADOR_Y = 172
+const MARCADOR_ALTO = 36
+const FUENTE_MARCADOR = 'bold 26px sans-serif'
+
 // Cuadro de la pista
 const PISTA_CENTRO_X = 960
 const PISTA_ANCHO = 1400
@@ -55,6 +74,26 @@ const PISTA_FUENTE_MINIMA = 32
 const PISTA_INTERLINEADO = 1.2
 const PISTA_LINEAS_MAX = 3
 const COLOR_FONDO_PISTA = 'rgba(0, 0, 0, 0.65)'
+
+// Cuenta regresiva y carteles
+const COLOR_FONDO_OSCURO = 'rgba(0, 0, 0, 0.55)'
+const CARTEL_Y = 300
+const CARTEL_ESPERA_Y = 540
+const FUENTE_CARTEL = 'bold 78px sans-serif'
+const FUENTE_CARTEL_ESPERA = 'bold 84px sans-serif'
+const FUENTE_CUENTA = 'bold 300px sans-serif'
+const CUENTA_Y = 610
+
+// Resultados
+const COLOR_FONDO_RESULTADOS = 'rgba(0, 0, 0, 0.88)'
+const RESULTADOS_TITULO_Y = 150
+const RESULTADOS_INICIO_Y = 300
+const RESULTADOS_ALTO_LINEA = 84
+const RESULTADOS_NOMBRE_X = 360
+const RESULTADOS_ACIERTOS_X = 1120
+const RESULTADOS_ERRORES_X = 1360
+const RESULTADOS_TIEMPO_X = 1780
+const RESULTADOS_MENSAJE_Y = 860
 
 const COLORES: Record<EstadoLetra, string> = {
   pendiente: COLOR_PENDIENTE,
@@ -138,7 +177,8 @@ function dibujarTextoConContorno(
   texto: string,
   x: number,
   y: number,
-  alineacion: CanvasTextAlign
+  alineacion: CanvasTextAlign,
+  color: string = COLOR_TEXTO
 ) {
   ctx.textAlign = alineacion
   ctx.textBaseline = 'middle'
@@ -150,7 +190,7 @@ function dibujarTextoConContorno(
   ctx.strokeStyle = COLOR_CONTORNO
   ctx.strokeText(texto, x, y)
   ctx.shadowBlur = 0
-  ctx.fillStyle = COLOR_TEXTO
+  ctx.fillStyle = color
   ctx.fillText(texto, x, y)
 }
 
@@ -265,6 +305,24 @@ function dibujarCuadroPista(ctx: CanvasRenderingContext2D, texto: string) {
   })
 }
 
+function dibujarMarcador(ctx: CanvasRenderingContext2D, marcador: MarcadorJugador[]) {
+  ctx.font = FUENTE_MARCADOR
+
+  marcador.forEach((jugador, indice) => {
+    const y = MARCADOR_Y + indice * MARCADOR_ALTO
+    const prefijo = jugador.enTurno ? '▶ ' : '   '
+    const texto = `${prefijo}${jugador.nombre}  ${formatearReloj(jugador.segundos)}  ·  ${jugador.aciertos} aciertos`
+    dibujarTextoConContorno(
+      ctx,
+      texto,
+      MARCADOR_X,
+      y,
+      'left',
+      jugador.enTurno ? COLOR_DESTACADO : COLOR_TEXTO_SECUNDARIO
+    )
+  })
+}
+
 function dibujarTextos(ctx: CanvasRenderingContext2D, datos: DatosDibujo) {
   ctx.font = FUENTE_JUGADOR
   dibujarTextoConContorno(ctx, datos.jugador, JUGADOR_X, JUGADOR_Y, 'left')
@@ -275,7 +333,111 @@ function dibujarTextos(ctx: CanvasRenderingContext2D, datos: DatosDibujo) {
   ctx.font = FUENTE_RELOJ
   dibujarTextoConContorno(ctx, formatearReloj(datos.segundos), RELOJ_X, RELOJ_Y, 'right')
 
-  dibujarCuadroPista(ctx, datos.pista)
+  dibujarMarcador(ctx, datos.marcador)
+  if (datos.pista) dibujarCuadroPista(ctx, datos.pista)
+}
+
+function dibujarCartel(ctx: CanvasRenderingContext2D, datos: DatosDibujo) {
+  if (!datos.cartel) return
+
+  if (datos.fase === 'cuentaRegresiva') {
+    ctx.fillStyle = COLOR_FONDO_OSCURO
+    ctx.fillRect(0, 0, CANVAS_ANCHO, CANVAS_ALTO)
+    ctx.font = FUENTE_CARTEL
+    dibujarTextoConContorno(ctx, datos.cartel, CANVAS_ANCHO / 2, CARTEL_Y, 'center')
+  }
+
+  if (datos.fase === 'esperandoTurno') {
+    ctx.font = FUENTE_CARTEL_ESPERA
+    dibujarTextoConContorno(
+      ctx,
+      datos.cartel,
+      CANVAS_ANCHO / 2,
+      CARTEL_ESPERA_Y,
+      'center'
+    )
+  }
+}
+
+function dibujarCuentaRegresiva(ctx: CanvasRenderingContext2D, datos: DatosDibujo) {
+  if (datos.cuentaRegresiva === null) return
+
+  ctx.font = FUENTE_CUENTA
+  dibujarTextoConContorno(
+    ctx,
+    String(datos.cuentaRegresiva),
+    CANVAS_ANCHO / 2,
+    CUENTA_Y,
+    'center'
+  )
+}
+
+function dibujarResultados(ctx: CanvasRenderingContext2D, datos: DatosDibujo) {
+  ctx.fillStyle = COLOR_FONDO_RESULTADOS
+  ctx.fillRect(0, 0, CANVAS_ANCHO, CANVAS_ALTO)
+
+  ctx.font = 'bold 76px sans-serif'
+  dibujarTextoConContorno(ctx, 'Resultados', CANVAS_ANCHO / 2, RESULTADOS_TITULO_Y, 'center')
+
+  const resultados = datos.resultados
+  if (!resultados) return
+
+  resultados.filas.forEach((fila, indice) => {
+    const y = RESULTADOS_INICIO_Y + indice * RESULTADOS_ALTO_LINEA
+    const destacado = !resultados.empate && fila.nombre === resultados.ganador
+    const color = destacado ? COLOR_DESTACADO : COLOR_TEXTO
+
+    ctx.font = 'bold 44px sans-serif'
+    dibujarTextoConContorno(
+      ctx,
+      `${indice + 1}. ${fila.nombre}`,
+      RESULTADOS_NOMBRE_X,
+      y,
+      'left',
+      color
+    )
+    dibujarTextoConContorno(
+      ctx,
+      `${fila.aciertos} aciertos`,
+      RESULTADOS_ACIERTOS_X,
+      y,
+      'left',
+      color
+    )
+    dibujarTextoConContorno(
+      ctx,
+      `${fila.errores} errores`,
+      RESULTADOS_ERRORES_X,
+      y,
+      'left',
+      color
+    )
+    dibujarTextoConContorno(
+      ctx,
+      formatearReloj(Math.ceil(fila.tiempoRestanteMs / 1000)),
+      RESULTADOS_TIEMPO_X,
+      y,
+      'right',
+      color
+    )
+  })
+
+  const mensaje =
+    resultados.filas.length === 0
+      ? 'Sin jugadores'
+      : resultados.empate
+        ? 'Empate'
+        : `Gana ${resultados.ganador}`
+
+  ctx.font = 'bold 72px sans-serif'
+  dibujarTextoConContorno(
+    ctx,
+    mensaje,
+    CANVAS_ANCHO / 2,
+    RESULTADOS_MENSAJE_Y,
+    'center',
+    resultados.empate ? COLOR_TEXTO : COLOR_DESTACADO
+  )
 }
 
 export function dibujarFrame(
@@ -285,8 +447,15 @@ export function dibujarFrame(
 ) {
   ctx.clearRect(0, 0, CANVAS_ANCHO, CANVAS_ALTO)
   dibujarVideoCover(ctx, video)
-  dibujarRosco(ctx, datos.estados, datos.letraActiva)
-  dibujarTextos(ctx, datos)
+
+  if (datos.fase !== 'fin') {
+    dibujarRosco(ctx, datos.estados, datos.letraActiva)
+    dibujarTextos(ctx, datos)
+    dibujarCartel(ctx, datos)
+    dibujarCuentaRegresiva(ctx, datos)
+  } else {
+    dibujarResultados(ctx, datos)
+  }
 
   ctx.shadowBlur = 0
   ctx.shadowColor = 'transparent'
