@@ -1,6 +1,14 @@
 'use client'
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type CSSProperties,
+} from 'react'
 
+import Banco from './Banco'
 import {
   borrarGrabacion,
   cargarGrabacion,
@@ -188,6 +196,19 @@ function leerDebugServidor() {
   return false
 }
 
+const ESTILO_BOTON_BANCO: CSSProperties = {
+  width: 200,
+  height: 48,
+  border: '1px solid rgba(255, 255, 255, 0.8)',
+  borderRadius: 10,
+  background: 'rgba(0, 0, 0, 0.55)',
+  color: '#fff',
+  fontSize: 17,
+  fontWeight: 700,
+  touchAction: 'manipulation',
+  WebkitTapHighlightColor: 'transparent',
+}
+
 export default function Camara() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -227,6 +248,7 @@ export default function Camara() {
   const [errorAudio, setErrorAudio] = useState<string | null>(null)
   const [vertical, setVertical] = useState(false)
   const [yaHorizontal, setYaHorizontal] = useState(false)
+  const [mostrarBanco, setMostrarBanco] = useState(false)
 
   const [estadoGrabacion, setEstadoGrabacion] = useState<EstadoGrabacion>('inactivo')
   const [estadoRecorder, setEstadoRecorder] = useState<MediaRecorder['state']>('inactive')
@@ -1330,24 +1352,44 @@ export default function Camara() {
         </div>
       )}
 
-      {!activa && estadoGrabacion !== 'revisando' && !cargandoRespaldo && (
-        <button
-          type="button"
-          onClick={empezar}
-          disabled={iniciando}
+      {!activa && estadoGrabacion !== 'revisando' && !cargandoRespaldo && !mostrarBanco && (
+        <div
           style={{
             position: 'absolute',
             inset: 0,
-            margin: 'auto',
-            width: 200,
-            height: 70,
-            fontSize: 24,
-            touchAction: 'manipulation',
             zIndex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 12,
+            padding: 16,
+            boxSizing: 'border-box',
           }}
         >
-          {iniciando ? 'Abriendo…' : 'Empezar'}
-        </button>
+          <button
+            type="button"
+            onClick={empezar}
+            disabled={iniciando}
+            style={{
+              width: 200,
+              height: 70,
+              fontSize: 24,
+              touchAction: 'manipulation',
+            }}
+          >
+            {iniciando ? 'Abriendo…' : 'Empezar'}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setMostrarBanco(true)}
+            disabled={iniciando}
+            style={ESTILO_BOTON_BANCO}
+          >
+            Banco de palabras
+          </button>
+        </div>
       )}
 
       {activa && estadoGrabacion !== 'revisando' && (
@@ -1611,7 +1653,7 @@ export default function Camara() {
         </div>
       )}
 
-      {vertical && !activa && !yaHorizontal && (
+      {vertical && !activa && !yaHorizontal && !mostrarBanco && (
         <div
           style={{
             position: 'fixed',
@@ -1628,7 +1670,23 @@ export default function Camara() {
             textAlign: 'center',
           }}
         >
-          Girá el teléfono a horizontal
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 20,
+            }}
+          >
+            <p style={{ margin: 0 }}>Girá el teléfono a horizontal</p>
+            <button
+              type="button"
+              onClick={() => setMostrarBanco(true)}
+              style={ESTILO_BOTON_BANCO}
+            >
+              Banco de palabras
+            </button>
+          </div>
         </div>
       )}
 
@@ -1796,6 +1854,8 @@ export default function Camara() {
           </button>
         </div>
       )}
+
+      {mostrarBanco && <Banco onVolver={() => setMostrarBanco(false)} />}
     </main>
   )
 }

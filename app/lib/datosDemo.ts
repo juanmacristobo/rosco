@@ -9,7 +9,7 @@ type EntradaDemo = {
 }
 
 // Dos entradas por letra: una que empieza con la letra y otra que la contiene.
-const BANCO_DEMO: EntradaDemo[] = [
+export const BANCO_DEMO: EntradaDemo[] = [
   { letra: 'A', tipo: 'empieza', pista: 'Fruto seco de cáscara dura que se usa para hacer turrón', respuesta: 'almendra' },
   { letra: 'A', tipo: 'contiene', pista: 'Instrumento musical de seis cuerdas que se toca con los dedos', respuesta: 'guitarra' },
 
