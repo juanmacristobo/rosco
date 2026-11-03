@@ -30,6 +30,11 @@ type Nota = {
   volumen: number
 }
 
+// Volumen relativo por efecto (1 = sin cambios).
+const VOLUMEN_SONIDO: Partial<Record<NombreSonido, number>> = {
+  acierto: 0.35,
+}
+
 // Sin archivo en /sonidos, cada efecto se genera con osciladores.
 const DEFINICIONES: Record<NombreSonido, Nota[]> = {
   acierto: [
@@ -74,7 +79,8 @@ function crearNota(
   ctx: AudioContext,
   nota: Nota,
   destinos: AudioNode[],
-  cuando: number
+  cuando: number,
+  volumen = 1
 ) {
   const inicio = cuando + nota.inicio
   const fin = inicio + nota.duracion
@@ -92,9 +98,9 @@ function crearNota(
   }
 
   envolvente.gain.setValueAtTime(0, inicio)
-  envolvente.gain.linearRampToValueAtTime(nota.volumen, inicio + ataque)
+  envolvente.gain.linearRampToValueAtTime(nota.volumen * volumen, inicio + ataque)
   envolvente.gain.setValueAtTime(
-    nota.volumen,
+    nota.volumen * volumen,
     Math.max(inicio + ataque, fin - ataque)
   )
   envolvente.gain.linearRampToValueAtTime(0, fin)
@@ -151,20 +157,28 @@ export function crearSonidos(
   function reproducir(nombre: NombreSonido) {
     if (ctx.state === 'closed') return
 
+    const volumen = VOLUMEN_SONIDO[nombre] ?? 1
+
     try {
       const buffer = buffers.get(nombre)
       if (buffer) {
         const fuente = ctx.createBufferSource()
         fuente.buffer = buffer
-        for (const destino of destinos) fuente.connect(destino)
-        fuente.onended = () => fuente.disconnect()
+        const salida = ctx.createGain()
+        salida.gain.value = volumen
+        fuente.connect(salida)
+        for (const destino of destinos) salida.connect(destino)
+        fuente.onended = () => {
+          fuente.disconnect()
+          salida.disconnect()
+        }
         fuente.start()
         return
       }
 
       const cuando = ctx.currentTime + 0.005
       for (const nota of DEFINICIONES[nombre]) {
-        crearNota(ctx, nota, destinos, cuando)
+        crearNota(ctx, nota, destinos, cuando, volumen)
       }
     } catch {
       // Un fallo de audio nunca debe cortar el juego.
