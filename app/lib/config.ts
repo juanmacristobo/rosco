@@ -4,8 +4,11 @@ export const CANVAS_ANCHO = 1920
 export const CANVAS_ALTO = 1080
 
 // Juego
+export const MAX_JUGADORES = 4
 export const MIN_OPCIONES_POR_LETRA = 2
 export const TIEMPO_POR_JUGADOR_MS = 150_000
+export const TIEMPO_MIN_SEGUNDOS = 30
+export const TIEMPO_MAX_SEGUNDOS = 600
 export const DELTA_MAX_TICK_MS = 1_000
 export const CUENTA_REGRESIVA_MS = 3_000
 export const COLA_TURNO_MS = 3_000

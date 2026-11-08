@@ -97,7 +97,12 @@ export function useJuego({
     accion: AccionJuego
   ) {
     const sonidos = sonidosRef.current
-    if (!sonidos || accion.tipo === 'REINICIAR') return
+    if (
+      !sonidos ||
+      accion.tipo === 'REINICIAR' ||
+      accion.tipo === 'CONFIGURAR'
+    )
+      return
 
     const ahora = accion.ahora
 

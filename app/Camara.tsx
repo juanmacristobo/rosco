@@ -3,8 +3,10 @@
 import { useEffect, useRef, useState } from 'react'
 
 import Banco from './Banco'
+import Preparacion from './Preparacion'
 import { AvisoOrientacion } from './componentes/AvisoOrientacion'
 import { AvisoSinAudio } from './componentes/AvisoSinAudio'
+import { BotonFlotante } from './componentes/BotonFlotante'
 import {
   BotonEmpezarTurno,
   BotonIniciarPartida,
@@ -13,7 +15,11 @@ import {
 } from './componentes/BotonesJuego'
 import { CartelRespuestaOperador } from './componentes/CartelRespuestaOperador'
 import { ControlesGrabacion } from './componentes/ControlesGrabacion'
-import { ESTILO_CANVAS, ESTILO_MAIN } from './componentes/estilos'
+import {
+  ESTILO_BOTONES_JUEGO_COLUMNA,
+  ESTILO_CANVAS,
+  ESTILO_MAIN,
+} from './componentes/estilos'
 import { EtiquetaDebug } from './componentes/EtiquetaDebug'
 import { EtiquetaGrabacion } from './componentes/EtiquetaGrabacion'
 import { MensajesError } from './componentes/MensajesError'
@@ -39,6 +45,7 @@ export default function Camara() {
   const [tipoSesionAudioActual, setTipoSesionAudioActual] = useState('no soportado')
   const [errorAudio, setErrorAudio] = useState<string | null>(null)
   const [mostrarBanco, setMostrarBanco] = useState(false)
+  const [mostrarPreparacion, setMostrarPreparacion] = useState(false)
 
   const debug = useDebug()
 
@@ -191,11 +198,12 @@ export default function Camara() {
 
       {estadoGrabacion === 'grabando' && avisoSinAudio && <AvisoSinAudio />}
 
-      {!activa && estadoGrabacion !== 'revisando' && !cargandoRespaldo && !mostrarBanco && (
+      {!activa && estadoGrabacion !== 'revisando' && !cargandoRespaldo && !mostrarBanco && !mostrarPreparacion && (
         <PantallaInicio
           iniciando={iniciando}
           onEmpezar={empezar}
           onAbrirBanco={() => setMostrarBanco(true)}
+          onAbrirPreparacion={() => setMostrarPreparacion(true)}
         />
       )}
 
@@ -207,6 +215,17 @@ export default function Camara() {
           onCambiarCamara={cambiarCamara}
           onDetener={detenerYReiniciar}
         />
+      )}
+
+      {activa && faseJuego === 'listo' && estadoGrabacion === 'inactivo' && (
+        <div style={ESTILO_BOTONES_JUEGO_COLUMNA}>
+          <BotonFlotante
+            variante="banco"
+            onClick={() => setMostrarPreparacion(true)}
+          >
+            Preparar partida
+          </BotonFlotante>
+        </div>
       )}
 
       {activa && faseJuego === 'listo' && estadoGrabacion === 'inactivo' && (
@@ -245,8 +264,11 @@ export default function Camara() {
         />
       )}
 
-      {vertical && !activa && !yaHorizontal && !mostrarBanco && (
-        <AvisoOrientacion onAbrirBanco={() => setMostrarBanco(true)} />
+      {vertical && !activa && !yaHorizontal && !mostrarBanco && !mostrarPreparacion && (
+        <AvisoOrientacion
+          onAbrirBanco={() => setMostrarBanco(true)}
+          onAbrirPreparacion={() => setMostrarPreparacion(true)}
+        />
       )}
 
       {estadoGrabacion === 'revisando' && urlGrabacion && (
@@ -262,6 +284,17 @@ export default function Camara() {
           onCompartir={compartir}
           onDescargar={descargar}
           onGrabarDeNuevo={grabarDeNuevo}
+        />
+      )}
+
+      {mostrarPreparacion && (
+        <Preparacion
+          onVolver={() => setMostrarPreparacion(false)}
+          onAbrirBanco={() => setMostrarBanco(true)}
+          onConfirmar={(jugadores) => {
+            dispatch({ tipo: 'CONFIGURAR', jugadores })
+            setMostrarPreparacion(false)
+          }}
         />
       )}
 

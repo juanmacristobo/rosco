@@ -10,10 +10,12 @@ export function PantallaInicio({
   iniciando,
   onEmpezar,
   onAbrirBanco,
+  onAbrirPreparacion,
 }: {
   iniciando: boolean
   onEmpezar: () => void
   onAbrirBanco: () => void
+  onAbrirPreparacion: () => void
 }) {
   return (
     <div style={ESTILO_PANTALLA_INICIO}>
@@ -32,6 +34,14 @@ export function PantallaInicio({
         disabled={iniciando}
       >
         Banco de palabras
+      </BotonFlotante>
+
+      <BotonFlotante
+        variante="banco"
+        onClick={onAbrirPreparacion}
+        disabled={iniciando}
+      >
+        Preparar partida
       </BotonFlotante>
     </div>
   )

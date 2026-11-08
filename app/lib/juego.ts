@@ -35,6 +35,7 @@ export type FaseJuego =
 export type Juego = {
   fase: FaseJuego
   jugadores: Jugador[]
+  iniciales: JugadorInicial[]
   turno: number
   proximoTurno: number | null
   ultimoTs: number | null
@@ -48,6 +49,7 @@ export type AccionJuego =
   | { tipo: 'PASAPALABRA'; ahora: number }
   | { tipo: 'TICK'; ahora: number }
   | { tipo: 'SIGUIENTE_TURNO'; ahora: number }
+  | { tipo: 'CONFIGURAR'; jugadores: Jugador[] }
   | { tipo: 'REINICIAR' }
 
 export type FilaResultado = {
@@ -66,6 +68,7 @@ export type ResultadoJuego = {
 export type JugadorInicial = {
   nombre: string
   rosco: LetraRosco[]
+  tiempoRestanteMs?: number
 }
 
 export function contarAciertos(jugador: Jugador): number {
@@ -77,15 +80,24 @@ function contarErrores(jugador: Jugador): number {
 }
 
 export function crearJuego(jugadores: JugadorInicial[]): Juego {
-  return {
-    fase: 'listo',
-    jugadores: jugadores.map(({ nombre, rosco }) => ({
+  const iniciales: JugadorInicial[] = jugadores.map(
+    ({ nombre, rosco, tiempoRestanteMs }) => ({
       nombre,
       rosco: rosco.map((letra) => ({ ...letra, estado: 'pendiente' as const })),
-      tiempoRestanteMs: TIEMPO_POR_JUGADOR_MS,
+      tiempoRestanteMs: tiempoRestanteMs ?? TIEMPO_POR_JUGADOR_MS,
+    })
+  )
+
+  return {
+    fase: 'listo',
+    jugadores: iniciales.map(({ nombre, rosco, tiempoRestanteMs }) => ({
+      nombre,
+      rosco: rosco.map((letra) => ({ ...letra, estado: 'pendiente' as const })),
+      tiempoRestanteMs: tiempoRestanteMs ?? TIEMPO_POR_JUGADOR_MS,
       letraActual: 0,
       terminado: false,
     })),
+    iniciales,
     turno: 0,
     proximoTurno: null,
     ultimoTs: null,
@@ -232,10 +244,19 @@ function avanzarFaseAutomatica(juego: Juego, ahora: number): Juego {
 }
 
 export function reducirJuego(juego: Juego, accion: AccionJuego): Juego {
-  if (accion.tipo === 'REINICIAR') {
+  if (accion.tipo === 'CONFIGURAR') {
+    if (juego.fase !== 'listo') return juego
     return crearJuego(
-      juego.jugadores.map(({ nombre, rosco }) => ({ nombre, rosco }))
+      accion.jugadores.map(({ nombre, rosco, tiempoRestanteMs }) => ({
+        nombre,
+        rosco,
+        tiempoRestanteMs,
+      }))
     )
+  }
+
+  if (accion.tipo === 'REINICIAR') {
+    return crearJuego(juego.iniciales)
   }
 
   if (juego.fase === 'jugando') {
