@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef, useState, type RefObject } from 'react'
+import { useEffect, useRef, useState, type RefObject } from 'react'
 
 import { elegirMimeType, leerTipoSesionAudio } from '../lib/grabacion'
 import {
@@ -70,6 +70,54 @@ export function useCamara({
     const video = videoRef.current
     if (video) video.srcObject = null
   }
+
+  // Defensa: iOS puede pausar el <video> al rotar el teléfono. Si la cámara
+  // sigue activa y no se detuvo a propósito, se reintenta la reproducción.
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+
+    const alPausar = () => {
+      if (!activa || desmontadoRef.current) return
+      if (iniciandoRef.current || cambiandoRef.current) return
+      if (!videoStreamRef.current) return
+      void video.play().catch(() => undefined)
+    }
+
+    video.addEventListener('pause', alPausar)
+    return () => video.removeEventListener('pause', alPausar)
+  }, [activa, videoStreamRef, desmontadoRef])
+
+  // Defensa: al terminar un cambio de orientación, si el video quedó pausado
+  // o sin datos suficientes, se reintenta play() con un debounce corto.
+  useEffect(() => {
+    let timeoutId: number | null = null
+
+    const reintentar = () => {
+      if (timeoutId !== null) window.clearTimeout(timeoutId)
+
+      timeoutId = window.setTimeout(() => {
+        timeoutId = null
+        if (!activa || desmontadoRef.current) return
+        if (iniciandoRef.current || cambiandoRef.current) return
+
+        const video = videoRef.current
+        if (!video || !videoStreamRef.current) return
+        if (video.paused || video.readyState < 2) {
+          void video.play().catch(() => undefined)
+        }
+      }, 300)
+    }
+
+    window.addEventListener('orientationchange', reintentar)
+    window.addEventListener('resize', reintentar)
+
+    return () => {
+      if (timeoutId !== null) window.clearTimeout(timeoutId)
+      window.removeEventListener('orientationchange', reintentar)
+      window.removeEventListener('resize', reintentar)
+    }
+  }, [activa, videoStreamRef, desmontadoRef])
 
   async function empezar() {
     if (iniciandoRef.current || activa) return

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, type RefObject } from 'react'
+import { useEffect, useRef, type RefObject } from 'react'
 
 import { dibujarFrame, type DatosDibujo } from '../lib/dibujo'
 import { resultados, type AccionJuego, type Juego } from '../lib/juego'
@@ -51,6 +51,12 @@ export function useRenderLoop({
   dispatchRef: RefObject<(accion: AccionJuego) => void>
   juegoRef: RefObject<Juego>
 }) {
+  // DEBUG TEMPORAL: FPS reales. El contador se incrementa en cada frame sin
+  // provocar renders; el valor se recalcula una vez por segundo.
+  const fpsRef = useRef(0)
+  const framesRef = useRef(0)
+  const inicioFpsRef = useRef(0)
+
   useEffect(() => {
     if (!activa) return
 
@@ -61,10 +67,23 @@ export function useRenderLoop({
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
+    framesRef.current = 0
+    inicioFpsRef.current = performance.now()
+    fpsRef.current = 0
+
     const dibujar = () => {
       const ahora = performance.now()
       dispatchRef.current({ tipo: 'TICK', ahora })
       dibujarFrame(ctx, video, construirDatosDibujo(juegoRef.current, ahora))
+
+      framesRef.current += 1
+      const transcurrido = ahora - inicioFpsRef.current
+      if (transcurrido >= 1000) {
+        fpsRef.current = Math.round((framesRef.current * 1000) / transcurrido)
+        framesRef.current = 0
+        inicioFpsRef.current = ahora
+      }
+
       rafRef.current = requestAnimationFrame(dibujar)
     }
 
@@ -75,6 +94,10 @@ export function useRenderLoop({
         cancelAnimationFrame(rafRef.current)
         rafRef.current = null
       }
+      fpsRef.current = 0
+      framesRef.current = 0
     }
   }, [activa])
+
+  return { fpsRef }
 }

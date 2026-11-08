@@ -138,9 +138,9 @@ export default function Camara() {
     }
   })
 
-  const { vertical, yaHorizontal } = useOrientacion()
+  const { vertical, ultimoCambioOrientacionRef } = useOrientacion()
 
-  useRenderLoop({
+  const { fpsRef } = useRenderLoop({
     activa,
     canvasRef,
     videoRef,
@@ -153,6 +153,16 @@ export default function Camara() {
   // cuando dispatch actualiza turnoJuego.
   // eslint-disable-next-line react-hooks/refs
   const nombreTurno = juegoRef.current.jugadores[turnoJuego]?.nombre ?? ''
+
+  // El aviso se muestra siempre en vertical mientras no haya partida en curso:
+  // antes de abrir la cámara o con la cámara activa esperando para empezar.
+  const mostrarAvisoOrientacion =
+    vertical &&
+    faseJuego === 'listo' &&
+    estadoGrabacion === 'inactivo' &&
+    !mostrarBanco &&
+    !mostrarPreparacion &&
+    !cargandoRespaldo
 
   return (
     <main style={ESTILO_MAIN}>
@@ -182,6 +192,11 @@ export default function Camara() {
           // igual que en el original.
           // eslint-disable-next-line react-hooks/refs
           sonidos={sonidosRef.current}
+          vertical={vertical}
+          ultimoCambioOrientacionRef={ultimoCambioOrientacionRef}
+          videoRef={videoRef}
+          videoStreamRef={videoStreamRef}
+          fpsRef={fpsRef}
         />
       )}
 
@@ -198,7 +213,7 @@ export default function Camara() {
 
       {estadoGrabacion === 'grabando' && avisoSinAudio && <AvisoSinAudio />}
 
-      {!activa && estadoGrabacion !== 'revisando' && !cargandoRespaldo && !mostrarBanco && !mostrarPreparacion && (
+      {!activa && estadoGrabacion !== 'revisando' && !cargandoRespaldo && !mostrarBanco && !mostrarPreparacion && !mostrarAvisoOrientacion && (
         <PantallaInicio
           iniciando={iniciando}
           onEmpezar={empezar}
@@ -228,7 +243,7 @@ export default function Camara() {
         </div>
       )}
 
-      {activa && faseJuego === 'listo' && estadoGrabacion === 'inactivo' && (
+      {activa && faseJuego === 'listo' && estadoGrabacion === 'inactivo' && !mostrarAvisoOrientacion && (
         <BotonIniciarPartida
           onClick={() => dispatch({ tipo: 'INICIAR', ahora: performance.now() })}
         />
@@ -264,7 +279,7 @@ export default function Camara() {
         />
       )}
 
-      {vertical && !activa && !yaHorizontal && !mostrarBanco && !mostrarPreparacion && (
+      {mostrarAvisoOrientacion && (
         <AvisoOrientacion
           onAbrirBanco={() => setMostrarBanco(true)}
           onAbrirPreparacion={() => setMostrarPreparacion(true)}
